@@ -55,9 +55,15 @@ Implementations: [`fc/src/protocol.cpp`](../fc/src/protocol.cpp) (FC side) and
   This keeps the reply format fixed while making the deploy mechanism
   traceable.
 
-FC command line: `flight_computer [--mode baseline|stub] [--inject-hang-at <t>]`.
-`stub` is a plumbing test double: it echoes the barometer, always reports
-`PAD` and never deploys.
+FC command line:
+`flight_computer [--mode kalman|baseline|stub] [--param key=value] [--inject-hang-at <t>]`.
+
+* `kalman` is the default. `baseline` is the raw-barometer detector, kept for
+  comparison.
+* `stub` is a plumbing test double: it echoes the barometer, always reports
+  `PAD` and never deploys.
+* `--param` overrides a numeric tuning value, for tuning and mistuning studies
+  (see `fc/src/config.cpp`). Unknown keys are rejected.
 
 The FC's `E` reasons are `line_too_long`, `empty_line`, `empty_field`,
 `bad_field_count`, `unknown_tag`, `bad_number` and `non_increasing_time`.

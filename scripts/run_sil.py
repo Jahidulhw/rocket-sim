@@ -1,13 +1,16 @@
 """Fly closed-loop software-in-the-loop flights with the C++ flight computer.
 
-    python scripts/run_sil.py                         # one flight, seed 1
+    python scripts/run_sil.py                         # one flight, seed 1, Kalman FC
     python scripts/run_sil.py --seed 7 --mode baseline
     python scripts/run_sil.py --seeds 50              # deploy-timing statistics over 50 seeds
+    python scripts/run_sil.py --compare --seeds 50    # baseline vs Kalman on identical seeds
     python scripts/run_sil.py --set wind.speed_mps=6
 
 Single flight: prints FC events next to the true events, deploy timing and
 mechanism, and writes the per-tick log to out/sil/sil_log.csv.
 Multi-seed: prints and saves deploy-timing statistics to out/sil/.
+Compare: both detectors on the same seeds (same sensor noise), saved to
+out/sil/compare_baseline_kalman.json.
 """
 
 from __future__ import annotations
@@ -84,11 +87,43 @@ def timing_stats(dts: np.ndarray) -> dict:
             "within_0.5s": float(np.mean(np.abs(dts) <= 0.5))}
 
 
+def deploy_errors(cfg, mode: str, seeds, fc_exe=None) -> np.ndarray:
+    out = []
+    for s in seeds:
+        res = run_sil(cfg, SilConfig(seed=s, fc_exe=fc_exe, fc_mode=mode, pre_launch_s=3.0, post_landing_s=0.0))
+        out.append(res.flight.deployment.get("dt_from_apogee_s", np.nan))
+    return np.array(out)
+
+
+def compare(cfg, args) -> int:
+    n = args.seeds if args.seeds > 0 else 50
+    seeds = list(range(args.seed, args.seed + n))
+    t0 = time.perf_counter()
+    results = {m: deploy_errors(cfg, m, seeds, args.fc_exe) for m in ("baseline", "kalman")}
+    print(f"Deploy time - true apogee, {n} seeded SIL flights per detector (identical sensor noise), "
+          f"{time.perf_counter() - t0:.1f} s")
+    print(f"{'detector':<10} {'mean':>8} {'std':>7} {'min':>8} {'max':>8} {'|.| p95':>8} {'<=0.5 s':>8}")
+    summary = {}
+    for m, d in results.items():
+        st = timing_stats(d)
+        summary[m] = {**st, "dt_from_apogee_s": d.tolist()}
+        print(f"{m:<10} {st['mean_s']:+8.3f} {st['std_s']:7.3f} {st['min_s']:+8.3f} {st['max_s']:+8.3f} "
+              f"{st['abs_p95_s']:8.3f} {100 * st['within_0.5s']:7.0f}%")
+    better = int(np.sum(np.abs(results["kalman"]) < np.abs(results["baseline"])))
+    print(f"Kalman closer to true apogee on {better}/{n} seeds")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUT_DIR / "compare_baseline_kalman.json"
+    path.write_text(json.dumps({"seeds": seeds, **summary}, indent=1), encoding="utf-8")
+    print(f"saved {path.relative_to(REPO_ROOT)}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=str(REPO_ROOT / "configs" / "default.json"))
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
-    ap.add_argument("--mode", default="baseline", choices=["baseline", "stub"])
+    ap.add_argument("--mode", default="kalman", choices=["kalman", "baseline", "stub"])
+    ap.add_argument("--compare", action="store_true", help="run baseline and Kalman on the same seeds")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--seeds", type=int, default=0, help="run this many seeds (seed, seed+1, ...) and report statistics")
     ap.add_argument("--fc-exe", default=None)
@@ -100,6 +135,9 @@ def main(argv=None) -> int:
         print_single(res, args.mode)
         print(f"Log              : {write_log_csv(res, OUT_DIR / 'sil_log.csv').relative_to(REPO_ROOT)}")
         return 0
+
+    if args.compare:
+        return compare(cfg, args)
 
     t0 = time.perf_counter()
     dts, mech = [], []

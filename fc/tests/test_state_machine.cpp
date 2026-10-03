@@ -81,6 +81,12 @@ void drive(StateMachine& sm, Trace& tr, int k0, int k1, double dt, AltFn alt, Ac
 
 constexpr double kDt = 0.01;
 
+FcConfig baseline_cfg() {
+  FcConfig c;
+  c.apogee_mode = fc::ApogeeMode::Baseline;
+  return c;
+}
+
 }  // namespace
 
 // ------------------------------------------------------------------ PAD --
@@ -214,7 +220,7 @@ TEST(StateMachine, NoDeployInPadOrBoostEvenIfBaroFalls_REQ003) {
 
 TEST(StateMachine, BaselineApogeeOnNoiselessParabola) {
   Profile p;
-  FcConfig cfg;
+  FcConfig cfg = baseline_cfg();
   StateMachine sm(cfg);
   Trace tr;
   drive(sm, tr, -200, 800, kDt, [&](double t) { return p.alt(t); }, [&](double t) { return p.accel(t); });
@@ -237,7 +243,7 @@ TEST(StateMachine, BaselineApogeeOnNoiselessParabola) {
 TEST(StateMachine, BaselineApogeeWithNoiseIsLateButBounded) {
   Profile p;
   for (unsigned seed = 1; seed <= 20; ++seed) {
-    StateMachine sm;
+    StateMachine sm(baseline_cfg());
     Trace tr;
     drive(sm, tr, -500, 900, kDt, [&](double t) { return p.alt(t); },
           [&](double t) { return p.accel(t); }, Sensors::nominal(), seed);
@@ -248,11 +254,69 @@ TEST(StateMachine, BaselineApogeeWithNoiseIsLateButBounded) {
   }
 }
 
+TEST(StateMachine, KalmanApogeeOnNoisyParabola) {
+  Profile p;
+  FcConfig cfg;  // default mode: Kalman
+  ASSERT_EQ(cfg.apogee_mode, fc::ApogeeMode::Kalman);
+  for (unsigned seed = 1; seed <= 20; ++seed) {
+    StateMachine sm(cfg);
+    Trace tr;
+    drive(sm, tr, -500, 900, kDt, [&](double t) { return p.alt(t); },
+          [&](double t) { return p.accel(t); }, Sensors::nominal(), seed);
+    const double err = tr.first(FlightState::Apogee) - p.apogee_t();
+    // v < 0 for 5 samples: about 40 ms of confirmation lag plus filter error.
+    EXPECT_GT(err, -0.05) << "seed " << seed;
+    EXPECT_LT(err, 0.15) << "seed " << seed;
+    EXPECT_EQ(sm.deploy_reason(), DeployReason::Apogee);
+  }
+}
+
+TEST(StateMachine, KalmanBeatsBaselineOnIdenticalInput) {
+  Profile p;
+  for (unsigned seed = 1; seed <= 10; ++seed) {
+    StateMachine kal, base(baseline_cfg());
+    Trace tk, tb;
+    auto alt = [&](double t) { return p.alt(t); };
+    auto acc = [&](double t) { return p.accel(t); };
+    drive(kal, tk, -500, 900, kDt, alt, acc, Sensors::nominal(), seed);
+    drive(base, tb, -500, 900, kDt, alt, acc, Sensors::nominal(), seed);
+    EXPECT_LT(std::fabs(tk.first(FlightState::Apogee) - p.apogee_t()),
+              std::fabs(tb.first(FlightState::Apogee) - p.apogee_t())) << "seed " << seed;
+  }
+}
+
+TEST(StateMachine, KalmanReportsVelocityAndAltitude) {
+  Profile p;
+  StateMachine sm;
+  Trace tr;
+  drive(sm, tr, -500, 650, kDt, [&](double t) { return p.alt(t); }, [&](double t) { return p.accel(t); },
+        Sensors::nominal(), 6);
+  // Mid-coast (3..6 s): estimates track truth closely; truth v = 60 - 11.81 (t - 1.5).
+  for (std::size_t i = 0; i < tr.t.size(); ++i) {
+    const double t = tr.t[i];
+    if (t < 3.0 || t > 6.0) continue;
+    const double v_true = p.v_bo() + p.coast_a * (t - p.burn_t);
+    ASSERT_NEAR(tr.out[i].est_vel_mps, v_true, 0.5) << t;
+    ASSERT_NEAR(tr.out[i].est_alt_m, p.alt(t), 0.5) << t;
+  }
+}
+
+TEST(StateMachine, AccelReferenceLearnsGravityPlusBiasOnPad) {
+  StateMachine sm;
+  Trace tr;
+  drive(sm, tr, 0, 1000, kDt, [](double) { return 0.0; }, [](double) { return kG; }, Sensors::nominal(), 2);
+  EXPECT_NEAR(sm.accel_ref_mps2(), kG + 0.2, 0.05);
+  EXPECT_NEAR(tr.out.back().est_vel_mps, 0.0, 0.1);
+}
+
 // --------------------------------------------------------- BACKUP TIMER --
 
 TEST(StateMachine, BackupTimerFiresWhenApogeeNeverSeen) {
+  // Baseline detector + frozen barometer: apogee is never seen, so this
+  // exercises the timer path. (Kalman behaviour under a stuck barometer is a
+  // milestone-4 fault case.)
   Profile p;
-  FcConfig cfg;
+  FcConfig cfg = baseline_cfg();
   StateMachine sm(cfg);
   Trace tr;
   // Barometer freezes at 3 s (stuck sensor): the baseline can never see a drop.
@@ -267,7 +331,7 @@ TEST(StateMachine, BackupTimerFiresWhenApogeeNeverSeen) {
 
 TEST(StateMachine, BackupTimerUsesTimestampsWithIrregularFrames) {
   Profile p;
-  FcConfig cfg;
+  FcConfig cfg = baseline_cfg();
   StateMachine sm(cfg);
   Noise jitter(42);
   double t = -2.0, t_dep = std::nan("");
@@ -285,14 +349,18 @@ TEST(StateMachine, BackupTimerUsesTimestampsWithIrregularFrames) {
 
 TEST(StateMachine, TimeGapAcrossApogeeStillDetects) {
   // 300 ms of lost frames right at apogee: detection resumes on new data.
+  for (const auto mode : {fc::ApogeeMode::Baseline, fc::ApogeeMode::Kalman}) {
   Profile p;
-  StateMachine sm;
+  FcConfig cfg;
+  cfg.apogee_mode = mode;
+  StateMachine sm(cfg);
   Trace tr;
   drive(sm, tr, -200, 655, kDt, [&](double t) { return p.alt(t); }, [&](double t) { return p.accel(t); });
   drive(sm, tr, 686, 900, kDt, [&](double t) { return p.alt(t); }, [&](double t) { return p.accel(t); });
   const double err = tr.first(FlightState::Apogee) - p.apogee_t();
-  EXPECT_GT(err, 0.0);
+  EXPECT_GT(err, 0.0);   // frames resume after apogee, so detection is after it
   EXPECT_LT(err, 1.0);
+  }
 }
 
 // ------------------------------------------------------ DESCENT / LANDED --

@@ -19,33 +19,50 @@ bool Persistence::update(bool condition, double t, double max_gap_s) {
 
 StateMachine::StateMachine(FcConfig cfg)
     : cfg_(cfg),
+      kf_(cfg.kf),
       launch_accel_(cfg.launch_accel_samples),
       launch_baro_(cfg.launch_baro_samples),
       burnout_(cfg.burnout_samples),
-      apogee_(cfg.apogee_samples) {}
+      apogee_baro_(cfg.apogee_samples),
+      apogee_kf_(cfg.kalman_apogee_samples) {}
 
 FcOutput StateMachine::update(const SensorFrame& f) {
   const double dt = prev_t_ ? f.t - *prev_t_ : 0.0;
   prev_t_ = f.t;
 
-  // Ground reference: only learned on the pad, frozen from launch onward.
+  // Ground and accelerometer references: only learned on the pad, frozen
+  // from launch onward.
   if (state_ == FlightState::Pad) {
     if (!ground_init_) {
       ground_init_ = true;
       ground_start_t_ = f.t;
       ground_n_ = 0;
-      ground_m_ = 0.0;
     }
     if (f.t - ground_start_t_ < cfg_.ground_init_s) {
-      ++ground_n_;
-      ground_m_ += (f.baro_alt_m - ground_m_) / ground_n_;  // running mean
-    } else if (std::fabs(f.baro_alt_m - ground_m_) <= cfg_.ground_gate_m) {
+      ++ground_n_;  // running means
+      ground_m_ += (f.baro_alt_m - ground_m_) / ground_n_;
+      accel_ref_ += (f.accel_mps2 - accel_ref_) / ground_n_;
+    } else {
       const double alpha = 1.0 - std::exp(-dt / cfg_.ground_tau_s);  // dt-correct EMA
-      ground_m_ += alpha * (f.baro_alt_m - ground_m_);
+      if (std::fabs(f.baro_alt_m - ground_m_) <= cfg_.ground_gate_m)
+        ground_m_ += alpha * (f.baro_alt_m - ground_m_);
+      if (std::fabs(f.accel_mps2 - accel_ref_) <= cfg_.accel_ref_gate_mps2)
+        accel_ref_ += alpha * (f.accel_mps2 - accel_ref_);
     }
   }
   const double agl = f.baro_alt_m - ground_m_;
   if (launch_t_) max_agl_ = std::max(max_agl_, agl);
+
+  const bool use_kf = cfg_.apogee_mode == ApogeeMode::Kalman;
+  if (use_kf) {
+    if (!kf_.initialized()) {
+      kf_.init(agl);
+    } else {
+      kf_.predict(dt);
+      kf_.update_baro(agl);
+      kf_.update_accel(f.accel_mps2 - accel_ref_);  // kinematic acceleration, bias removed
+    }
+  }
 
   switch (state_) {
     case FlightState::Pad: on_pad(f, agl); break;
@@ -58,8 +75,8 @@ FcOutput StateMachine::update(const SensorFrame& f) {
 
   FcOutput out;
   out.state = state_;
-  out.est_alt_m = agl;
-  out.est_vel_mps = 0.0;
+  out.est_alt_m = use_kf ? kf_.x()[0] : agl;
+  out.est_vel_mps = use_kf ? kf_.x()[1] : 0.0;
   // Boost lockout, enforced at the output as well as by construction (only
   // COAST can command a deploy): no code path may fire in PAD or BOOST.
   out.deploy = deploy_ && state_ != FlightState::Pad && state_ != FlightState::Boost;
@@ -86,7 +103,10 @@ void StateMachine::on_boost(const SensorFrame& f, double agl) {
 }
 
 void StateMachine::on_coast(const SensorFrame& f, double agl) {
-  const bool apogee = apogee_.update(agl <= max_agl_ - cfg_.apogee_drop_m, f.t, cfg_.max_frame_gap_s);
+  const double gap = cfg_.max_frame_gap_s;
+  const bool apogee = cfg_.apogee_mode == ApogeeMode::Kalman
+                          ? apogee_kf_.update(kf_.x()[1] < 0.0, f.t, gap)
+                          : apogee_baro_.update(agl <= max_agl_ - cfg_.apogee_drop_m, f.t, gap);
   if (apogee) {
     state_ = FlightState::Apogee;
     command_deploy(DeployReason::Apogee);

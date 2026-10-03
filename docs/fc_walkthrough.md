@@ -6,8 +6,8 @@ I rejected, and what goes wrong when a value is mistuned. It assumes you know
 C++ and skips syntax.
 
 It is updated as each milestone lands:
-* State machine and baseline detector: milestone 2 (this version).
-* Kalman filter: milestone 3.
+* State machine and baseline detector: milestone 2.
+* Kalman filter: milestone 3 (this version).
 * Faults and requirements: milestone 4.
 
 **Scope.** The FC only detects flight events and commands parachute deployment.
@@ -349,7 +349,205 @@ equivalent of "command until confirmed".
 
 ## 7. Kalman filter
 
-*Added in milestone 3.*
+Code: [`fc/include/fc/kalman.hpp`](../fc/include/fc/kalman.hpp) and
+[`fc/src/kalman.cpp`](../fc/src/kalman.cpp). The filter is the **default
+apogee detector**. The baseline (§5.4) stays selectable with `--mode
+baseline`, and the two modes differ *only* in the apogee decision. Launch,
+burnout, lockout, the timer and landing are identical, so the comparison is
+fair.
+
+### 7.1 Why a filter at all
+
+The baseline must wait until the altitude has *visibly fallen*: about 2.5 m,
+or roughly 0.5 s. Velocity crosses zero *at* apogee. But differentiating the
+raw barometer gives velocity noise of about σ·√2 / dt ≈ 70 m/s at 100 Hz,
+which is useless.
+
+The accelerometer is smooth, but integrating it drifts: any bias integrates
+into a velocity error that grows linearly. The barometer is noisy, but it
+doesn't drift.
+
+The Kalman filter fuses the two optimally:
+* The accelerometer supplies the **short-term** shape.
+* The barometer pins the **long-term** level.
+
+### 7.2 State vector
+
+```
+x = [ h   altitude above ground (m)
+      v   vertical velocity (m/s, +up)
+      a   vertical kinematic acceleration (m/s², +up; −9.81 in free fall) ]
+```
+
+**Why `a` is a state, not a control input.** The common alternative is a
+2-state [h, v] filter that uses the accelerometer as a known input u in the
+prediction. I rejected it, for three reasons:
+
+1. The accelerometer is a **noisy measurement**, not a perfect input. As a
+   measurement it gets weighted by its R. As an input its noise enters the
+   state unfiltered.
+2. Each accelerometer sample gets an **innovation**. That's what allows
+   accelerometer outliers to be gated out in milestone 4. An input can't be
+   rejected.
+3. If accelerometer samples are missing, the 3-state filter keeps predicting
+   with the last acceleration. A 2-state filter has nothing to integrate.
+
+### 7.3 The matrices
+
+**F: state transition**, constant acceleration over the step dt.
+
+```
+F(dt) = [ 1  dt  dt²/2 ]        h' = h + v·dt + a·dt²/2
+        [ 0  1   dt    ]        v' = v + a·dt
+        [ 0  0   1     ]        a' = a
+```
+
+This is exact kinematics *if* the acceleration is constant over dt. It isn't,
+since drag changes as speed changes. Q accounts for the mismatch.
+
+**Q: process noise.** It is modelled as continuous white-noise **jerk** with
+spectral density q:
+
+```
+Q(dt) = q · [ dt⁵/20  dt⁴/8  dt³/6 ]
+            [ dt⁴/8   dt³/3  dt²/2 ]
+            [ dt³/6   dt²/2  dt    ]
+```
+
+* **Physically:** "the acceleration is not really constant; it wanders like a
+  random walk, at a rate set by q". In coast it changes from −52 m/s² at
+  burnout to −9.8 m/s² at apogee as drag fades.
+* **Why this form and not a hand-picked diagonal:** it is the *exact
+  integral* of the white jerk over the step. Two steps of dt therefore
+  accumulate exactly the uncertainty of one step of 2dt, F·Q(dt)·Fᵀ + Q(dt) =
+  Q(2dt) (unit test `ProcessNoiseIsExactWhiteJerkIntegral`).
+  * A skipped frame or irregular timing automatically gets the right
+    uncertainty growth.
+  * A per-step Q tuned for 10 ms would be wrong for a 500 ms gap.
+
+**H: measurement models.** Each sensor observes one state directly:
+
+```
+barometer:      H_b = [1 0 0]     z_b = h_AGL
+accelerometer:  H_a = [0 0 1]     z_a = accel − accel_ref  (kinematic, bias removed)
+```
+
+**R: measurement noise**, taken from the sensor model, not tuned:
+
+```
+R_b = σ_b² + Δ²/12 = 0.5² + 0.1²/12 = 0.2508 m²      (white noise + quantization)
+R_a = σ_a²         = 0.5²           = 0.25 (m/s²)²
+```
+
+* Quantization to a step Δ adds uniformly distributed error with variance
+  Δ²/12, independent of the Gaussian noise, so the variances add.
+* **Biases are deliberately *not* put into R.** R models *zero-mean white*
+  noise. A bias is a constant offset, and inflating R can't remove it, only
+  slow the filter down. Biases are removed instead by the pad references:
+  * the ground reference, for the barometer (§3);
+  * `accel_ref`, for the accelerometer. On the pad the true acceleration is
+    exactly 0, so the mean pad reading *is* g + bias. Subtracting it removes
+    gravity and the bias in one step. Unit test:
+    `AccelReferenceLearnsGravityPlusBiasOnPad`.
+
+### 7.4 Implementation choices
+
+| Choice | Why |
+|---|---|
+| **Two sequential scalar updates** per frame (barometer, then accelerometer) | With diagonal R this equals one joint update exactly. The innovation variance S is then a scalar, so the filter never inverts a matrix: no numerical risk, no linear-algebra library |
+| **Joseph-form covariance update** P = (I−KH)P(I−KH)ᵀ + KRKᵀ, then symmetrise | Algebraically equal to (I−KH)P, but it stays symmetric positive semidefinite under rounding. The short form can lose definiteness over long runs, after which the filter believes it is *more* certain than possible and diverges. Unit test: 20,000 steps with dt from 0.1 ms to 2 s, checking PSD after every predict and update |
+| **dt from timestamps** in every predict | Dropped frames are simply a longer predict step (unit test `HandlesSkippedFrames`). The same noiseless data at 100 Hz or on an irregular grid gives the same answer (`IrregularDtGivesSameAnswerOnExactModel`) |
+| **Fixed-size `std::array` matrices** | No heap, no dependencies, deterministic. That suits an embedded FC |
+| **Start on the pad** at x = [h_AGL, 0, 0], P = diag(R_b, 1, 1) | The filter converges during the pad sit. The first second shows a small transient (|v| up to about 0.7 m/s) while `accel_ref` is still being learned. After that, pad velocity stays within ±0.2 m/s |
+
+### 7.5 Apogee from the filter
+
+**Condition:** in COAST, the estimated velocity `v < 0` for **5 consecutive
+samples** (50 ms).
+
+* Near apogee v falls at about 9.8 m/s², so 50 ms after the true crossing,
+  v ≈ −0.5 m/s. That is about 6× the estimate's noise (0.08 m/s RMS), so a
+  single noisy crossing can't confirm.
+* The window is the main source of lag: about 40 ms plus filter error.
+* *Too few samples* (1): in clean flights it's actually fine, but it's
+  fragile against a single bad estimate, such as an outlier slipping
+  through.
+* *Too many* (50): adds 0.5 s and hands back the baseline's whole advantage.
+* *Rejected: predictive deploy* (fire when v < +0.4 m/s, i.e. "apogee in
+  40 ms"). It removes the systematic +0.046 s, but turns a harmless known delay
+  into a risk of deploying while still climbing. Deploying 46 ms late means
+  the rocket is descending at 0.45 m/s, which is physically irrelevant.
+
+### 7.6 How Q and R were tuned, and what mistuning does
+
+**R comes from the sensor model** (§7.3), so no tuning is needed. **q is the
+only real tuning knob.** I chose it with a closed-loop SIL sweep: 20 seeded
+nominal flights per value, using `--param kf.jerk_psd=q`.
+
+| q (m²/s⁵) | Deploy − true apogee (mean ± std) | Velocity RMS in coast | Velocity bias near apogee |
+|---:|---:|---:|---:|
+| 0.01 | **−0.044 ± 0.009 s (early)** | 3.51 m/s | −0.92 m/s |
+| 0.1 | +0.038 ± 0.009 s | 0.42 m/s | −0.08 m/s |
+| 1 | +0.046 ± 0.010 s | 0.081 m/s | +0.00 m/s |
+| **10 (chosen)** | **+0.047 ± 0.010 s** | **0.073 m/s** | +0.01 m/s |
+| 100 | +0.047 ± 0.010 s | 0.072 m/s | +0.01 m/s |
+| 1000 | +0.046 ± 0.010 s | 0.074 m/s | +0.01 m/s |
+| 10000 | +0.049 ± 0.011 s | 0.118 m/s | +0.02 m/s |
+
+**Reading the table:**
+* **q too small: a systematic, dangerous error.** The model insists the
+  acceleration hardly changes, so `a` lags the real (fading) drag. The
+  integrated velocity is biased low, and it crosses zero *before* apogee. At
+  q = 0.01 the FC deploys 44 ms early on every flight, and with a stronger
+  mismatch it would be earlier still. A pytest locks this failure mode in
+  (`test_mistuned_process_noise_biases_velocity_and_deploys_early`).
+* **q too large: a random, benign error.** The filter trusts every
+  accelerometer sample, and the estimate gets noisier.
+* **The plateau runs from 1 to 1000.** q = 10 sits two decades from either
+  edge, so the design is insensitive to the exact value.
+  * Physical sanity check: the √(q·1 s) ≈ 3 m/s² of acceleration wander per
+    √s is the same order as how fast drag deceleration actually changes in
+    coast (about 7.6 m/s² per s on average).
+
+**Mistuning R** (q = 10, 20 seeds each):
+
+| Filter R | Deploy − apogee | Velocity RMS | Altitude RMS | Effect |
+|---|---:|---:|---:|---|
+| Matched to the sensor model | +0.047 ± 0.010 s | **0.073** | **0.068** | Best on every metric, as theory predicts for a matched filter |
+| R_b × 0.01 | +0.049 ± 0.018 s | 0.171 | 0.095 | Over-trusts the barometer, so its noise leaks into velocity |
+| R_b × 100 | +0.046 ± 0.017 s | 0.118 | 0.152 | Ignores the barometer, so it drifts more on the accelerometer |
+| R_a × 0.01 | +0.046 ± 0.013 s | 0.106 | 0.123 | Over-trusts accelerometer noise |
+| R_a × 100 | +0.049 ± 0.018 s | 0.675 | 0.158 | `a` becomes sluggish and velocity lags the real dynamics |
+
+**Takeaway.** Deploy *timing* is robust to large R errors, because apogee is a
+zero crossing of a steep signal (dv/dt = −g). Estimate *quality* is not:
+mismatched R costs 1.5–9× in velocity accuracy. So getting the *model* right
+(q) matters more than getting the noise numbers exactly right.
+
+### 7.7 Results: baseline vs Kalman
+
+There are 50 seeded nominal SIL flights per detector. Up to deployment both
+detectors see **identical sensor noise**, because the noise stream is drawn
+per tick, independent of the FC.
+
+| Detector | Mean | Std | Min | Max | |error| p95 | Within 0.5 s |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline (raw barometer) | +0.509 s | 0.085 s | +0.252 s | +0.642 s | 0.618 s | 34 % |
+| **Kalman** | **+0.046 s** | **0.008 s** | +0.022 s | +0.062 s | 0.062 s | **100 %** |
+
+Kalman is closer to true apogee on **50/50** seeds. It is about **11× less
+late** and **10× less variable**. Its remaining +0.046 s is almost entirely
+the deliberate 5-sample confirmation window.
+
+Reproduce: `python scripts/run_sil.py --compare --seeds 50`.
+
+### 7.8 Known gap, closed in milestone 4
+
+A plain Kalman filter trusts every measurement. If the barometer **sticks**
+while the rocket climbs, the filter is told "altitude is constant", drags the
+velocity toward zero, and could declare apogee early, at speed. Spikes and
+outliers pull the estimate the same way. Milestone 4 adds **innovation
+gating** for this.
 
 ## 8. Faults: detection and tolerance
 

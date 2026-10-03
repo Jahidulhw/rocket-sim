@@ -12,15 +12,18 @@
 #include <string_view>
 #include <thread>
 
+#include "fc/config.hpp"
 #include "fc/protocol.hpp"
 #include "fc/runner.hpp"
 
 namespace {
 
 void usage() {
-  std::cerr << "usage: flight_computer [--mode baseline|stub] [--inject-hang-at <t>]\n"
-               "  --mode baseline       apogee from raw barometer (default)\n"
+  std::cerr << "usage: flight_computer [--mode kalman|baseline|stub] [--inject-hang-at <t>]\n"
+               "  --mode kalman         apogee from Kalman velocity estimate (default)\n"
+               "  --mode baseline       apogee from raw barometer\n"
                "  --mode stub           TEST ONLY: echo the barometer, report PAD, never deploy\n"
+               "  --param key=value     override a tuning parameter (see fc/src/config.cpp)\n"
                "  --inject-hang-at <t>  TEST ONLY: stop responding at the first frame with time >= t\n";
 }
 
@@ -38,13 +41,27 @@ bool parse_args(int argc, char** argv, fc::RunnerOptions& opts) {
       opts.hang_at_s = p.frame.t;
     } else if (a == "--mode" && i + 1 < argc) {
       const std::string_view m = argv[++i];
-      if (m == "baseline") {
+      if (m == "kalman") {
+        opts.mode = fc::Mode::Flight;
+        opts.config.apogee_mode = fc::ApogeeMode::Kalman;
+      } else if (m == "baseline") {
         opts.mode = fc::Mode::Flight;
         opts.config.apogee_mode = fc::ApogeeMode::Baseline;
       } else if (m == "stub") {
         opts.mode = fc::Mode::Stub;
       } else {
         std::cerr << "unknown mode: " << m << "\n";
+        return false;
+      }
+    } else if (a == "--param" && i + 1 < argc) {
+      // --param key=value: tuning studies only; defaults are the flight values.
+      const std::string_view kv = argv[++i];
+      const std::size_t eq = kv.find('=');
+      const fc::ParsedLine p = eq == std::string_view::npos
+                                   ? fc::ParsedLine{}
+                                   : fc::parse_line("S " + std::string(kv.substr(eq + 1)) + " 0 0");
+      if (p.kind != fc::LineKind::Sensor || !fc::set_param(opts.config, kv.substr(0, eq), p.frame.t)) {
+        std::cerr << "invalid --param: " << kv << "\n";
         return false;
       }
     } else if (a == "--help" || a == "-h") {

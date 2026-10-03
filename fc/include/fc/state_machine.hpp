@@ -8,6 +8,7 @@
 
 #include "fc/config.hpp"
 #include "fc/flight_state.hpp"
+#include "fc/kalman.hpp"
 #include "fc/protocol.hpp"
 
 namespace fc {
@@ -17,7 +18,7 @@ enum class DeployReason { None, Apogee, BackupTimer };
 struct FcOutput {
   FlightState state = FlightState::Pad;
   double est_alt_m = 0.0;    // above the ground reference
-  double est_vel_mps = 0.0;  // baseline mode has no velocity estimate: 0
+  double est_vel_mps = 0.0;  // Kalman estimate; baseline mode has none and reports 0
   bool deploy = false;       // latched: stays true once commanded
 };
 
@@ -50,6 +51,8 @@ class StateMachine {
   DeployReason deploy_reason() const { return reason_; }
   std::optional<double> launch_time() const { return launch_t_; }
   double ground_ref_m() const { return ground_m_; }
+  double accel_ref_mps2() const { return accel_ref_; }
+  const Kalman3& filter() const { return kf_; }
 
  private:
   void on_pad(const SensorFrame& f, double agl);
@@ -68,11 +71,15 @@ class StateMachine {
   double ground_start_t_ = 0.0;
   int ground_n_ = 0;
   double ground_m_ = 0.0;
+  double accel_ref_ = 0.0;
+
+  Kalman3 kf_;
 
   Persistence launch_accel_;
   Persistence launch_baro_;
   Persistence burnout_;
-  Persistence apogee_;
+  Persistence apogee_baro_;
+  Persistence apogee_kf_;
   std::optional<double> launch_t_;
   double max_agl_ = 0.0;
 

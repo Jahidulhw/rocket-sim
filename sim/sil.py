@@ -158,7 +158,7 @@ class SilConfig:
     sensors: SensorConfig = field(default_factory=SensorConfig)
     seed: int = 0
     fc_exe: str | None = None          # None: find_fc_executable()
-    fc_mode: str = "baseline"          # FC --mode: "baseline" (raw baro apogee) or "stub"
+    fc_mode: str = "kalman"            # FC --mode: "kalman" (default), "baseline" (raw baro apogee) or "stub"
     fc_args: tuple = ()                # extra FC arguments (e.g. test-only --inject-hang-at)
     watchdog_timeout_s: float = 2.0
     pre_launch_s: float = 10.0         # pad sit before ignition (FC calibration, false-launch exposure)

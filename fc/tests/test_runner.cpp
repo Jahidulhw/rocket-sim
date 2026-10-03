@@ -80,7 +80,22 @@ TEST(Runner, StubModeEchoesBarometer) {
 }
 
 TEST(Runner, FlightModeReportsGroundRelativeAltitude) {
-  Runner r;  // default: flight mode
+  // Baseline mode reports the raw ground-relative barometer value (and no
+  // velocity), which makes the expected text exact.
+  fc::RunnerOptions opts;
+  opts.config.apogee_mode = fc::ApogeeMode::Baseline;
+  Runner r(opts);
   EXPECT_EQ(r.handle_line("S 0.000000 42.000 9.81").line, "R 0.000000 PAD 0.000 0.000 0");
   EXPECT_EQ(r.handle_line("S 0.010000 42.500 9.81").line, "R 0.010000 PAD 0.250 0.000 0");
+}
+
+TEST(Runner, SetParamAcceptsKnownKeysOnly) {
+  fc::FcConfig c;
+  EXPECT_TRUE(fc::set_param(c, "kf.jerk_psd", 3.5));
+  EXPECT_DOUBLE_EQ(c.kf.jerk_psd, 3.5);
+  EXPECT_TRUE(fc::set_param(c, "kalman_apogee_samples", 7));
+  EXPECT_EQ(c.kalman_apogee_samples, 7);
+  EXPECT_FALSE(fc::set_param(c, "kalman_apogee_samples", 2.5));  // counts are integers
+  EXPECT_FALSE(fc::set_param(c, "kf.jerk_psd", -1.0));
+  EXPECT_FALSE(fc::set_param(c, "steering_gain", 1.0));          // unknown key
 }

@@ -8,14 +8,19 @@
 //
 // Units: s, m, m/s, m/s^2. "accel" is vertical SPECIFIC FORCE (+g at rest).
 
+#include <string_view>
+
+#include "fc/kalman.hpp"
+
 namespace fc {
 
 enum class ApogeeMode {
+  Kalman,    // Kalman velocity estimate crosses zero (default)
   Baseline,  // raw barometer: N samples a margin below the running maximum
 };
 
 struct FcConfig {
-  ApogeeMode apogee_mode = ApogeeMode::Baseline;
+  ApogeeMode apogee_mode = ApogeeMode::Kalman;
 
   // Persistence counters ("N consecutive samples") are a minimum-duration
   // filter. A gap between frames longer than this breaks the run: we have no
@@ -31,6 +36,10 @@ struct FcConfig {
   double ground_init_s = 1.0;
   double ground_tau_s = 2.0;
   double ground_gate_m = 3.0;
+  // Accelerometer reference, learned the same way (same init window and tau).
+  // On the pad the true acceleration is exactly zero, so the mean reading IS
+  // g + bias; the filter uses a = accel - accel_ref. Gate: 4 sigma of noise.
+  double accel_ref_gate_mps2 = 2.0;
 
   // ---- PAD -> BOOST ------------------------------------------------------
   // Primary: accel > 25 m/s^2 (~2.5 g, i.e. 1.5 g above rest) for 5 samples.
@@ -65,6 +74,15 @@ struct FcConfig {
   double apogee_drop_m = 1.5;
   int apogee_samples = 10;
 
+  // ---- COAST -> APOGEE (Kalman) ------------------------------------------
+  // Apogee when the estimated vertical velocity has been negative for 5
+  // consecutive samples (50 ms). Near apogee v falls at ~9.8 m/s^2, so 50 ms
+  // after the true crossing v is already ~-0.5 m/s, several times the
+  // estimate's noise; the window adds 40 ms of lag and rejects a single
+  // noisy crossing.
+  int kalman_apogee_samples = 5;
+  KalmanConfig kf{};
+
   // ---- Backup timer -------------------------------------------------------
   // Deploy if apogee has not been detected 8.5 s after launch: nominal apogee
   // is ~7.4 s after launch with +-0.2 s (1 sigma) dispersion, so 8.5 s never
@@ -80,5 +98,9 @@ struct FcConfig {
   double landing_band_m = 3.0;
   double landing_duration_s = 5.0;
 };
+
+// Override one numeric parameter by name (e.g. "kf.jerk_psd"). Returns false
+// for an unknown key or an out-of-range value.
+bool set_param(FcConfig& c, std::string_view key, double value);
 
 }  // namespace fc
