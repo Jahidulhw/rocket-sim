@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Outputs from scripts/run_flight.py and scripts/run_montecarlo.py
+out/
+
+# Generated viewer data (rebuilt by scripts/build_site.py and by CI)
+web/data/*.json
+!web/data/.gitkeep

@@ -1,0 +1,46 @@
+{
+  "rocket": {
+    "dry_mass_kg": 0.04,
+    "body_diameter_m": 0.0248,
+    "cd": 0.75
+  },
+  "motor": {
+    "kind": "eng",
+    "eng_file": "data/motors/Estes_C6.eng",
+    "ejection_delay_s": 5.0,
+    "impulse_scale": 1.0,
+    "thrust_n": 0.0,
+    "burn_time_s": 0.0,
+    "total_mass_kg": 0.0,
+    "propellant_mass_kg": 0.0
+  },
+  "launch": {
+    "rail_length_m": 1.0,
+    "tilt_deg": 0.0,
+    "azimuth_deg": 0.0,
+    "initial_speed_mps": 0.0
+  },
+  "atmosphere": {
+    "model": "isa",
+    "sea_level_density_kg_m3": 1.225,
+    "launch_altitude_m": 0.0
+  },
+  "wind": {
+    "speed_mps": 2.0,
+    "toward_deg": 90.0,
+    "shear_exponent": 0.0,
+    "reference_height_m": 10.0
+  },
+  "recovery": {
+    "enabled": true,
+    "chute_diameter_m": 0.305,
+    "chute_cd": 0.8,
+    "deploy_delay_s": null,
+    "near_apogee_window_s": 1.0
+  },
+  "sim": {
+    "dt_s": 0.005,
+    "integrator": "rk4",
+    "max_time_s": 600.0
+  }
+}

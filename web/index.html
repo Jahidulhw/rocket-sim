@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="3D trajectory viewer for an unguided hobby model rocket point-mass simulation.">
+  <title>Rocket Trajectory Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script>
+    // Runs before the module: collect errors (for manual/headless checks) and
+    // show a visible message if the module never starts (e.g. CDN blocked).
+    window.__viewerErrors = [];
+    window.addEventListener("error", (e) => window.__viewerErrors.push(String(e.message || e)));
+    window.addEventListener("unhandledrejection", (e) => window.__viewerErrors.push(String(e.reason)));
+    setTimeout(() => {
+      if (document.body.dataset.status === "loading" && !window.__viewerStarted) {
+        const box = document.getElementById("error");
+        box.textContent = "The viewer did not start. three.js could not be loaded from cdn.jsdelivr.net " +
+          "(offline or blocked?), or your browser does not support ES modules / import maps.";
+        box.hidden = false;
+        document.body.dataset.status = "error";
+      }
+    }, 15000);
+  </script>
+</head>
+<body data-status="loading">
+  <header class="topbar">
+    <div class="brand">
+      <h1>Rocket Trajectory</h1>
+      <span class="sub">Unguided hobby rocket &middot; 3-DOF point mass</span>
+    </div>
+    <div class="top-controls">
+      <label class="field">
+        <span>Dataset</span>
+        <select id="dataset" aria-label="Dataset"></select>
+      </label>
+      <div class="seg" role="group" aria-label="Camera mode" id="cam-group">
+        <button type="button" id="cam-orbit" aria-pressed="true" title="Free orbit camera">Orbit</button>
+        <button type="button" id="cam-follow" aria-pressed="false" title="Camera follows the rocket">Follow</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="stage">
+    <canvas id="scene" aria-label="3D view of the rocket trajectory"></canvas>
+
+    <section id="telemetry" class="panel" aria-live="off">
+      <h2>Telemetry</h2>
+      <dl>
+        <div><dt>Time</dt><dd><span id="tm-time">-</span> s</dd></div>
+        <div><dt>Altitude</dt><dd><span id="tm-alt">-</span> m</dd></div>
+        <div><dt>Speed</dt><dd><span id="tm-speed">-</span> m/s</dd></div>
+        <div><dt>Vertical</dt><dd><span id="tm-vz">-</span> m/s</dd></div>
+        <div><dt>Downrange</dt><dd><span id="tm-range">-</span> m</dd></div>
+        <div><dt>Phase</dt><dd><span id="tm-phase" class="phase-badge">-</span></dd></div>
+      </dl>
+      <p id="summary" class="summary"></p>
+    </section>
+
+    <section id="mc-panel" class="panel" hidden>
+      <h2>Dispersion</h2>
+      <dl id="mc-stats"></dl>
+      <p class="summary" id="mc-note"></p>
+    </section>
+
+    <aside id="legend" class="panel legend" aria-label="Legend"></aside>
+
+    <div id="error" role="alert" hidden></div>
+    <div id="loading" aria-hidden="true">Loading&hellip;</div>
+    <p class="scale-note">Rocket and parachute drawn enlarged (not to scale)</p>
+  </main>
+
+  <footer id="playback">
+    <button type="button" id="play" class="primary" aria-label="Pause">Pause</button>
+    <button type="button" id="restart" aria-label="Restart">Restart</button>
+    <label class="field speed">
+      <span>Speed</span>
+      <select id="speed" aria-label="Playback speed">
+        <option value="0.25">0.25&times;</option>
+        <option value="0.5">0.5&times;</option>
+        <option value="1" selected>1&times;</option>
+        <option value="2">2&times;</option>
+        <option value="4">4&times;</option>
+      </select>
+    </label>
+    <input type="range" id="scrub" min="0" max="1" step="0.001" value="0" aria-label="Time scrubber">
+    <output id="time-readout">0.0 / 0.0 s</output>
+  </footer>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
