@@ -114,7 +114,18 @@ def resolve_deploy_delay(cfg: FlightConfig, motor) -> float | None:
     return getattr(motor, "ejection_delay_s", None)
 
 
-def simulate(cfg: FlightConfig, motor=None) -> FlightResult:
+def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
+    """Integrate one flight.
+
+    `controller` (optional) closes the loop with a flight computer. It must
+    provide `period_s` and `tick(t, y, accel) -> bool`, and is called at every
+    t = k * period_s (k = 0, 1, ...) until landing; the integrator steps onto
+    those instants exactly. `accel` is the true acceleration vector at t
+    (zero while held on the pad). Returning True deploys the parachute at t,
+    unless it is already out. The motor's ejection charge stays active and
+    independent; `deployment["mechanism"]` records which fired first.
+    With controller=None the step sequence is exactly the open-loop one.
+    """
     motor = motor if motor is not None else build_motor(cfg.motor)
     dyn = Dynamics(cfg, motor)
     step = INTEGRATORS[cfg.sim.integrator]
@@ -130,6 +141,7 @@ def simulate(cfg: FlightConfig, motor=None) -> FlightResult:
     delay = resolve_deploy_delay(cfg, motor)
     t_deploy = motor.burn_time + delay if delay is not None else None
     true_apogee = None
+    deploy_mechanism = None
     breakpoints = set(motor.breakpoints())
     if t_deploy is not None:
         breakpoints.add(t_deploy)
@@ -170,6 +182,35 @@ def simulate(cfg: FlightConfig, motor=None) -> FlightResult:
         ys.append(y_.copy())
         phases.append(phase())
 
+    def deploy(mechanism: str):
+        nonlocal chute, true_apogee, deploy_mechanism
+        chute = True
+        deploy_mechanism = mechanism
+        events["deploy"] = _event("deploy", t, y)
+        if y[5] > 0.0:
+            # Still climbing: the chute will cause an early "apogee". To
+            # judge deploy timing we need the TRUE apogee, i.e. where the
+            # rocket would have peaked without the chute. Integrate a
+            # chute-free shadow copy of the coast until vz = 0.
+            true_apogee = _coast_to_apogee(dyn, step, dt, t, y)
+
+    tick_k = 0
+    period = controller.period_s if controller is not None else math.inf
+
+    def run_tick():
+        nonlocal tick_k
+        accel = np.zeros(3) if on_pad else dyn.derivatives(t, y, on_rail, chute)[3:6]
+        command = controller.tick(t, y.copy(), accel)
+        tick_k += 1
+        if command and not chute and cfg.recovery.enabled:
+            deploy("fc")
+
+    def tick_due() -> bool:
+        return controller is not None and t >= tick_k * period - _T_EPS
+
+    if tick_due():
+        run_tick()  # k = 0 at t = 0
+
     while t < cfg.sim.max_time_s:
         # ---- step size: never step across a known discontinuity -------------
         h_nom = min(dt, dyn.max_stable_step(y, chute))
@@ -179,6 +220,10 @@ def simulate(cfg: FlightConfig, motor=None) -> FlightResult:
                 if t_new >= bp - 1e-9 * h_nom:
                     h, t_new = bp - t, bp
                 break
+        if controller is not None:
+            t_tick = tick_k * period
+            if t_new >= t_tick - 1e-9 * h_nom:
+                h, t_new = t_tick - t, t_tick
 
         if on_pad:
             # ---- held on the pad until thrust beats weight along the rail ----
@@ -212,6 +257,8 @@ def simulate(cfg: FlightConfig, motor=None) -> FlightResult:
                     burned_out = True
                     events["burnout"] = _event("burnout", t, y)
                 record(t, y)
+                if tick_due():
+                    run_tick()
                 continue
 
         f = _left_limited(dyn, t_new, on_rail, chute)
@@ -265,21 +312,16 @@ def simulate(cfg: FlightConfig, motor=None) -> FlightResult:
             burned_out = True
             events["burnout"] = _event("burnout", t, y)
         if t_deploy is not None and not chute and t >= t_deploy - _T_EPS:
-            chute = True
-            events["deploy"] = _event("deploy", t, y)
-            if y[5] > 0.0:
-                # Still climbing: the chute will cause an early "apogee". To
-                # judge deploy timing we need the TRUE apogee, i.e. where the
-                # rocket would have peaked without the chute. Integrate a
-                # chute-free shadow copy of the coast until vz = 0.
-                true_apogee = _coast_to_apogee(dyn, step, dt, t, y)
+            deploy("motor")
+        if tick_due():
+            run_tick()
         record(t, y)
 
     arr = np.array(ys)
     return FlightResult(config=cfg, motor=motor, t=np.array(ts), position=arr[:, 0:3],
                         velocity=arr[:, 3:6], mass=arr[:, 6], phase=phases, events=events,
                         landed=landed,
-                        deployment=_deployment_summary(cfg, events, true_apogee))
+                        deployment=_deployment_summary(cfg, events, true_apogee, deploy_mechanism))
 
 
 def _coast_to_apogee(dyn: Dynamics, step, dt: float, t: float, y: np.ndarray,
@@ -296,7 +338,8 @@ def _coast_to_apogee(dyn: Dynamics, step, dt: float, t: float, y: np.ndarray,
     raise RuntimeError("shadow coast never reached apogee")
 
 
-def _deployment_summary(cfg: FlightConfig, events: dict, true_apogee: Event | None) -> dict:
+def _deployment_summary(cfg: FlightConfig, events: dict, true_apogee: Event | None,
+                        mechanism: str | None = None) -> dict:
     """Was the chute out before, near, or after TRUE apogee, and how fast were we going?
 
     True apogee = where the rocket would have peaked without a parachute. If
@@ -308,7 +351,7 @@ def _deployment_summary(cfg: FlightConfig, events: dict, true_apogee: Event | No
     dep = events["deploy"]
     if true_apogee is None:
         true_apogee = events.get("apogee")
-    out = {"deployed": True, "t": dep.t, "altitude_m": float(dep.position[2]),
+    out = {"deployed": True, "mechanism": mechanism, "t": dep.t, "altitude_m": float(dep.position[2]),
            "speed_mps": float(np.linalg.norm(dep.velocity))}
     if true_apogee is None:  # cannot happen for a flight that lands; kept for safety
         out.update(true_apogee_t=None, true_apogee_m=None, dt_from_apogee_s=None, timing="unknown")

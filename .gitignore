@@ -11,3 +11,6 @@ out/
 # Generated viewer data (rebuilt by scripts/build_site.py and by CI)
 web/data/*.json
 !web/data/.gitkeep
+
+# C++ flight computer build tree (cmake -S fc -B fc/build)
+fc/build/
