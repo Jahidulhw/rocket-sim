@@ -39,6 +39,7 @@ endfunction()
 add_library(fc_core STATIC
   src/protocol.cpp
   src/runner.cpp
+  src/state_machine.cpp
 )
 target_include_directories(fc_core PUBLIC include)
 fc_set_warnings(fc_core)
@@ -64,6 +65,7 @@ if(FC_BUILD_TESTS)
   add_executable(fc_tests
     tests/test_protocol.cpp
     tests/test_runner.cpp
+    tests/test_state_machine.cpp
   )
   target_link_libraries(fc_tests PRIVATE fc_core GTest::gtest_main)
   fc_set_warnings(fc_tests)

@@ -71,3 +71,16 @@ TEST(Runner, NoHangWithoutOption) {
     ASSERT_EQ(r.handle_line(line).action, Action::Reply) << line;
   }
 }
+
+TEST(Runner, StubModeEchoesBarometer) {
+  fc::RunnerOptions opts;
+  opts.mode = fc::Mode::Stub;
+  Runner r(opts);
+  EXPECT_EQ(r.handle_line("S 0.000000 42.000 60.0").line, "R 0.000000 PAD 42.000 0.000 0");
+}
+
+TEST(Runner, FlightModeReportsGroundRelativeAltitude) {
+  Runner r;  // default: flight mode
+  EXPECT_EQ(r.handle_line("S 0.000000 42.000 9.81").line, "R 0.000000 PAD 0.000 0.000 0");
+  EXPECT_EQ(r.handle_line("S 0.010000 42.500 9.81").line, "R 0.010000 PAD 0.250 0.000 0");
+}

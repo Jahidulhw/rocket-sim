@@ -41,7 +41,23 @@ Implementations: [`fc/src/protocol.cpp`](../fc/src/protocol.cpp) (FC side) and
 * `state`: one of `PAD BOOST COAST APOGEE DESCENT LANDED`.
 * `est_alt`, `est_vel`: the FC's altitude (m) and vertical velocity (m/s)
   estimates, written `%.3f`.
-* `deploy`: `1` = fire the parachute charge now; `0` otherwise.
+* `deploy`: `1` = deployment commanded, `0` = not commanded. The flag is
+  **latched**: once the FC sends `1`, every later reply also carries `1`. If one
+  reply is lost or garbled, the next one still carries the command, and the
+  command can never be withdrawn. In PAD and BOOST it is always `0` (the boost
+  lockout).
+* **Why the FC deployed** can be read from `state` in the first reply with
+  `deploy = 1`:
+  * `APOGEE` means the apogee detector fired.
+  * `DESCENT` means the backup timer fired. The FC goes straight from COAST to
+    DESCENT, because it never confirmed apogee.
+
+  This keeps the reply format fixed while making the deploy mechanism
+  traceable.
+
+FC command line: `flight_computer [--mode baseline|stub] [--inject-hang-at <t>]`.
+`stub` is a plumbing test double: it echoes the barometer, always reports
+`PAD` and never deploys.
 
 The FC's `E` reasons are `line_too_long`, `empty_line`, `empty_field`,
 `bad_field_count`, `unknown_tag`, `bad_number` and `non_increasing_time`.

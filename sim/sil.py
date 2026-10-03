@@ -158,10 +158,11 @@ class SilConfig:
     sensors: SensorConfig = field(default_factory=SensorConfig)
     seed: int = 0
     fc_exe: str | None = None          # None: find_fc_executable()
-    fc_args: tuple = ()
+    fc_mode: str = "baseline"          # FC --mode: "baseline" (raw baro apogee) or "stub"
+    fc_args: tuple = ()                # extra FC arguments (e.g. test-only --inject-hang-at)
     watchdog_timeout_s: float = 2.0
     pre_launch_s: float = 10.0         # pad sit before ignition (FC calibration, false-launch exposure)
-    post_landing_s: float = 10.0       # at-rest frames after touchdown (FC landing detection)
+    post_landing_s: float = 15.0       # at-rest frames after touchdown; FC needs 5-8 s to confirm landing
 
 
 LOG_FIELDS = ("t", "z_true", "vz_true", "az_true", "baro", "accel", "sent", "reply_ok",
@@ -184,6 +185,32 @@ class SilResult:
     def deploy_mechanism(self) -> str | None:
         """'fc' or 'motor' (which deployed the chute first), None if it never deployed."""
         return self.flight.deployment.get("mechanism")
+
+    @property
+    def fc_deploy_reason(self) -> str | None:
+        """Why the FC commanded deploy, read from its state in the first deploy=1
+        reply: APOGEE -> 'apogee' (detector), DESCENT -> 'backup_timer' (the FC
+        goes COAST -> DESCENT directly when its timer fires)."""
+        idx = np.flatnonzero(self.log["fc_deploy"])
+        if idx.size == 0:
+            return None
+        return {"APOGEE": "apogee", "DESCENT": "backup_timer"}.get(self.log["fc_state"][idx[0]], "other")
+
+    def fc_state_times(self) -> dict:
+        """First tick at which the FC reported each state."""
+        out = {}
+        for t, s in zip(self.log["t"], self.log["fc_state"]):
+            if s and s not in out:
+                out[str(s)] = float(t)
+        return out
+
+    def fc_state_sequence(self) -> list:
+        """FC states in the order reported, consecutive duplicates removed."""
+        seq = []
+        for s in self.log["fc_state"]:
+            if s and (not seq or seq[-1] != s):
+                seq.append(str(s))
+        return seq
 
 
 class SilLink:
@@ -248,7 +275,8 @@ def run_sil(cfg: FlightConfig, sil: SilConfig | None = None) -> SilResult:
     sil = sil or SilConfig()
     sensors = SensorSuite(sil.sensors, np.random.default_rng(sil.seed))
     period = sensors.cfg.period_s
-    with FcProcess(find_fc_executable(sil.fc_exe), sil.fc_args, sil.watchdog_timeout_s) as fc:
+    args = ("--mode", sil.fc_mode, *sil.fc_args)
+    with FcProcess(find_fc_executable(sil.fc_exe), args, sil.watchdog_timeout_s) as fc:
         link = SilLink(fc, sensors)
         # Ticks are k * period on one integer grid across all three segments,
         # so stamps never accumulate floating-point drift.

@@ -18,7 +18,9 @@
 namespace {
 
 void usage() {
-  std::cerr << "usage: flight_computer [--inject-hang-at <t>]\n"
+  std::cerr << "usage: flight_computer [--mode baseline|stub] [--inject-hang-at <t>]\n"
+               "  --mode baseline       apogee from raw barometer (default)\n"
+               "  --mode stub           TEST ONLY: echo the barometer, report PAD, never deploy\n"
                "  --inject-hang-at <t>  TEST ONLY: stop responding at the first frame with time >= t\n";
 }
 
@@ -34,6 +36,17 @@ bool parse_args(int argc, char** argv, fc::RunnerOptions& opts) {
         return false;
       }
       opts.hang_at_s = p.frame.t;
+    } else if (a == "--mode" && i + 1 < argc) {
+      const std::string_view m = argv[++i];
+      if (m == "baseline") {
+        opts.mode = fc::Mode::Flight;
+        opts.config.apogee_mode = fc::ApogeeMode::Baseline;
+      } else if (m == "stub") {
+        opts.mode = fc::Mode::Stub;
+      } else {
+        std::cerr << "unknown mode: " << m << "\n";
+        return false;
+      }
     } else if (a == "--help" || a == "-h") {
       usage();
       return false;

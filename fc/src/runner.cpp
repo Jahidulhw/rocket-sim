@@ -2,7 +2,7 @@
 
 namespace fc {
 
-Runner::Runner(RunnerOptions opts) : opts_(opts) {}
+Runner::Runner(RunnerOptions opts) : opts_(opts), sm_(opts.config) {}
 
 Response Runner::handle_line(std::string_view line) {
   const ParsedLine p = parse_line(line);
@@ -22,9 +22,11 @@ Response Runner::handle_line(std::string_view line) {
   if (opts_.hang_at_s && f.t >= *opts_.hang_at_s) return {Action::Hang, {}};
   last_t_ = f.t;
 
-  // Milestone 1 stub: report PAD, pass the barometer through, never deploy.
-  Reply r{f.t, FlightState::Pad, f.baro_alt_m, 0.0, false};
-  return {Action::Reply, format_reply(r)};
+  if (opts_.mode == Mode::Stub) {
+    return {Action::Reply, format_reply(Reply{f.t, FlightState::Pad, f.baro_alt_m, 0.0, false})};
+  }
+  const FcOutput o = sm_.update(f);
+  return {Action::Reply, format_reply(Reply{f.t, o.state, o.est_alt_m, o.est_vel_mps, o.deploy})};
 }
 
 }  // namespace fc

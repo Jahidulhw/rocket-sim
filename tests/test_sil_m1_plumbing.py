@@ -145,7 +145,8 @@ def test_time_matches_tolerance():
 # ------------------------------------------------------- FC process (C++) --
 
 def test_protocol_round_trip_with_fc_process(fc_exe):
-    with FcProcess(fc_exe, timeout_s=5.0) as fc:
+    # Stub mode: echoes the barometer, so the round trip is checkable value by value.
+    with FcProcess(fc_exe, ["--mode", "stub"], timeout_s=5.0) as fc:
         for k in range(200):
             t, baro = k * 0.01, 0.1 * k
             r = parse_reply(fc.exchange(format_sensor_frame(t, baro, G0)))
@@ -302,7 +303,7 @@ def test_c6_7_backup_fires_after_true_apogee(sil_base_cfg):
 # ------------------------------------------------------------- SIL runs --
 
 def test_sil_stub_full_run(fc_exe, sil_base_cfg):
-    sil = SilConfig(seed=11, fc_exe=str(fc_exe), pre_launch_s=2.0, post_landing_s=3.0)
+    sil = SilConfig(seed=11, fc_exe=str(fc_exe), fc_mode="stub", pre_launch_s=2.0, post_landing_s=3.0)
     res = run_sil(sil_base_cfg, sil)
     log = res.log
     assert res.flight.landed

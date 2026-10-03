@@ -7,7 +7,9 @@
 #include <string>
 #include <string_view>
 
+#include "fc/config.hpp"
 #include "fc/protocol.hpp"
+#include "fc/state_machine.hpp"
 
 namespace fc {
 
@@ -22,7 +24,15 @@ struct Response {
   std::string line;
 };
 
+enum class Mode {
+  Flight,  // state machine (event detection + deploy decision)
+  Stub,    // plumbing test double: echo baro, PAD, never deploy
+};
+
 struct RunnerOptions {
+  Mode mode = Mode::Flight;
+  FcConfig config{};
+
   // Test-only fault injection: on the first frame with t >= hang_at_s the FC
   // stops replying (genuinely, the process blocks), so the simulator's
   // watchdog is exercised against a real hung process.
@@ -37,6 +47,7 @@ class Runner {
 
  private:
   RunnerOptions opts_;
+  StateMachine sm_;
   std::optional<double> last_t_;  // last ACCEPTED frame time (rejects time going backwards)
 };
 
