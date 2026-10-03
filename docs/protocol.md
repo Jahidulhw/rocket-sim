@@ -6,6 +6,11 @@ line per message, with lines ending in `\n`. The FC ignores a single trailing
 `\r`, because Windows pipes may deliver CRLF. The FC writes diagnostics only to
 **stderr**, so stdout carries nothing but protocol.
 
+Health events go to stderr as `fc: t=<t> HEALTH ...` lines, for example a sensor
+declared stuck, or the estimator declared inconsistent. The simulator
+collects them in `SilResult.fc_health_events`. They are deliberately **not**
+part of the reply format, which stays fixed.
+
 Implementations: [`fc/src/protocol.cpp`](../fc/src/protocol.cpp) (FC side) and
 [`sim/protocol.py`](../sim/protocol.py) (sim side), driven by
 [`sim/sil.py`](../sim/sil.py).

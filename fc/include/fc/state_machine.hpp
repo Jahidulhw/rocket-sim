@@ -5,6 +5,8 @@
 // guidance, steering or attitude control of any kind.
 
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "fc/config.hpp"
 #include "fc/flight_state.hpp"
@@ -39,6 +41,22 @@ class Persistence {
   std::optional<double> last_t_;
 };
 
+// Stuck-sensor detector: a live sensor with real noise essentially never
+// repeats a bit-identical reading, so N identical readings in a row means the
+// value is frozen (stuck register, dead bus returning stale data).
+class StaleDetector {
+ public:
+  explicit StaleDetector(int required) : required_(required) {}
+  // Returns true when the run of identical values reaches `required`.
+  // `exempt` samples (e.g. accelerometer at full scale) never count.
+  bool update(double value, bool exempt = false);
+
+ private:
+  int required_;  // 0 disables
+  int run_ = 0;
+  double last_ = 0.0;
+};
+
 class StateMachine {
  public:
   explicit StateMachine(FcConfig cfg = {});
@@ -54,12 +72,26 @@ class StateMachine {
   double accel_ref_mps2() const { return accel_ref_; }
   const Kalman3& filter() const { return kf_; }
 
+  // Health (latched once set).
+  bool baro_failed() const { return baro_failed_; }
+  bool accel_failed() const { return accel_failed_; }
+  bool estimator_inconsistent() const { return inconsistent_; }
+  int baro_rejections_total() const { return baro_rejected_total_; }
+  int accel_rejections_total() const { return accel_rejected_total_; }
+
+  // Human-readable health events since the last call (main.cpp prints them
+  // to stderr). Kept out of the reply so the protocol stays fixed.
+  std::vector<std::string> take_diagnostics();
+
  private:
+  void check_health(const SensorFrame& f);
+  void run_filter(double dt, const SensorFrame& f, double agl);
   void on_pad(const SensorFrame& f, double agl);
   void on_boost(const SensorFrame& f, double agl);
   void on_coast(const SensorFrame& f, double agl);
   void on_descent(const SensorFrame& f, double agl);
   void command_deploy(DeployReason why);
+  void diag(double t, const std::string& msg);
 
   FcConfig cfg_;
   FlightState state_ = FlightState::Pad;
@@ -75,6 +107,16 @@ class StateMachine {
 
   Kalman3 kf_;
 
+  StaleDetector baro_stale_;
+  StaleDetector accel_stale_;
+  bool baro_failed_ = false;
+  bool accel_failed_ = false;
+  bool inconsistent_ = false;
+  int baro_rejected_run_ = 0;
+  int accel_rejected_run_ = 0;
+  int baro_rejected_total_ = 0;
+  int accel_rejected_total_ = 0;
+
   Persistence launch_accel_;
   Persistence launch_baro_;
   Persistence burnout_;
@@ -87,6 +129,8 @@ class StateMachine {
   double land_ref_m_ = 0.0;
   double land_start_t_ = 0.0;
   double land_last_t_ = 0.0;
+
+  std::vector<std::string> diagnostics_;
 };
 
 }  // namespace fc

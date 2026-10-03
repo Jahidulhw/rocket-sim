@@ -36,6 +36,7 @@ struct KalmanConfig {
 struct UpdateResult {
   double innovation = 0.0;  // z - H x (before the update)
   double s = 0.0;           // innovation variance H P H' + R
+  bool accepted = true;     // false: rejected by the innovation gate, state untouched
 };
 
 class Kalman3 {
@@ -46,8 +47,11 @@ class Kalman3 {
   bool initialized() const { return init_; }
 
   void predict(double dt);
-  UpdateResult update_baro(double h_meas);
-  UpdateResult update_accel(double a_meas);
+  // gate_sigma > 0 enables innovation gating: the measurement is rejected
+  // (no state or covariance change) if |innovation| > gate_sigma * sqrt(S),
+  // i.e. a chi-square test with 1 degree of freedom.
+  UpdateResult update_baro(double h_meas, double gate_sigma = 0.0);
+  UpdateResult update_accel(double a_meas, double gate_sigma = 0.0);
 
   const Vec3& x() const { return x_; }
   const Mat3& P() const { return P_; }
@@ -58,7 +62,7 @@ class Kalman3 {
   static Mat3 process_noise(double dt, double q);
 
  private:
-  UpdateResult update_scalar(int idx, double z, double r);
+  UpdateResult update_scalar(int idx, double z, double r, double gate_sigma);
 
   KalmanConfig cfg_;
   double r_baro_;

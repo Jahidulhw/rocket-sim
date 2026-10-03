@@ -18,6 +18,7 @@ def test_kalman_is_the_default_mode():
     assert SilConfig().fc_mode == "kalman"
 
 
+@pytest.mark.req("REQ-001", "REQ-009")
 def test_kalman_sil_flight_deploys_at_apogee(kalman_run):
     r = kalman_run
     assert r.fc_state_sequence() == ["PAD", "BOOST", "COAST", "APOGEE", "DESCENT", "LANDED"]
@@ -44,6 +45,7 @@ def test_kalman_velocity_is_near_zero_on_pad(kalman_run):
     assert np.max(np.abs(log["est_vel"][settled_pad])) < 0.3
 
 
+@pytest.mark.req("REQ-001")
 def test_baseline_vs_kalman_same_seeds(fc_exe, sil_base_cfg, record_property):
     """Both detectors fly the same seeded flights (identical sensor noise up to
     deployment). The Kalman detector must be closer to true apogee on every seed."""
@@ -65,11 +67,24 @@ def test_baseline_vs_kalman_same_seeds(fc_exe, sil_base_cfg, record_property):
 def test_mistuned_process_noise_biases_velocity_and_deploys_early(fc_exe, sil_base_cfg):
     """q far too small makes the constant-acceleration model too rigid to
     follow the changing drag: velocity is biased low near apogee and the
-    zero crossing (deploy) comes EARLY. Documented mistuning failure mode."""
+    zero crossing (deploy) comes EARLY. Documented mistuning failure mode,
+    reproduced with innovation gating off (the milestone-3 filter)."""
+    r = run_sil(sil_base_cfg, SilConfig(seed=1, fc_exe=str(fc_exe), fc_mode="kalman",
+                                        fc_args=("--param", "kf.jerk_psd=0.01", "--param", "kf_gate_sigma=0"),
+                                        pre_launch_s=3.0, post_landing_s=0.0))
+    assert r.flight.deployment["dt_from_apogee_s"] < 0.0
+
+
+def test_mistuned_filter_is_caught_by_consistency_check(fc_exe, sil_base_cfg):
+    """With the default gating, the same mistuned filter disagrees with its
+    barometer persistently; the FC declares itself inconsistent and falls back
+    to the backup timer instead of deploying early."""
     r = run_sil(sil_base_cfg, SilConfig(seed=1, fc_exe=str(fc_exe), fc_mode="kalman",
                                         fc_args=("--param", "kf.jerk_psd=0.01"),
                                         pre_launch_s=3.0, post_landing_s=0.0))
-    assert r.flight.deployment["dt_from_apogee_s"] < 0.0
+    assert any("INCONSISTENT" in h for h in r.fc_health_events)
+    assert r.fc_deploy_reason == "backup_timer"
+    assert r.flight.deployment["dt_from_apogee_s"] > 0.0
 
 
 def test_fc_rejects_unknown_param(fc_exe):

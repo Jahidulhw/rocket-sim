@@ -131,6 +131,7 @@ def test_parse_reply_valid_and_crlf():
     "E bad_number",               # FC rejected our input
     "R 1.0 PAD 0 0 1" + " " * 300,
 ])
+@pytest.mark.req("REQ-007")
 def test_parse_reply_rejects_malformed(bad):
     with pytest.raises(ProtocolError):
         parse_reply(bad)
@@ -144,6 +145,7 @@ def test_time_matches_tolerance():
 
 # ------------------------------------------------------- FC process (C++) --
 
+@pytest.mark.req("REQ-008")
 def test_protocol_round_trip_with_fc_process(fc_exe):
     # Stub mode: echoes the barometer, so the round trip is checkable value by value.
     with FcProcess(fc_exe, ["--mode", "stub"], timeout_s=5.0) as fc:
@@ -157,6 +159,7 @@ def test_protocol_round_trip_with_fc_process(fc_exe):
     assert fc.returncode == 0
 
 
+@pytest.mark.req("REQ-008")
 def test_fc_rejects_malformed_lines_and_keeps_running(fc_exe):
     with FcProcess(fc_exe, timeout_s=5.0) as fc:
         assert parse_reply(fc.exchange("S 0.000000 0.0 9.81")).state == "PAD"
@@ -173,6 +176,7 @@ def test_fc_rejects_malformed_lines_and_keeps_running(fc_exe):
     assert fc.returncode == 0
 
 
+@pytest.mark.req("REQ-005")
 def test_watchdog_fires_on_hung_fc(fc_exe):
     timeout = 0.5
     fc = FcProcess(fc_exe, ["--inject-hang-at", "0.05"], timeout_s=timeout)
@@ -191,6 +195,7 @@ def test_watchdog_fires_on_hung_fc(fc_exe):
     assert any("injected hang" in s for s in fc.stderr_lines)
 
 
+@pytest.mark.req("REQ-005")
 def test_watchdog_detects_exited_fc(fc_exe):
     fc = FcProcess(fc_exe, timeout_s=5.0)
     try:
@@ -222,6 +227,7 @@ for k, line in enumerate(sys.stdin):
 """
 
 
+@pytest.mark.req("REQ-007")
 def test_sim_treats_malformed_fc_replies_as_no_command():
     """A garbage reply must never fire the chute, however many '1's it contains."""
     fc = FcProcess(sys.executable, ["-c", _BAD_FC], timeout_s=10.0)
@@ -321,6 +327,7 @@ def test_sil_stub_full_run(fc_exe, sil_base_cfg):
     assert np.all(log["z_true"][:n_pre] == 0.0) and np.all(log["z_true"][-n_post:] == 0.0)
 
 
+@pytest.mark.req("REQ-005")
 def test_sil_watchdog_end_to_end_backup_charge_deploys(fc_exe, sil_base_cfg):
     sil = SilConfig(seed=2, fc_exe=str(fc_exe), fc_args=("--inject-hang-at", "3.0"),
                     watchdog_timeout_s=0.5, pre_launch_s=1.0, post_landing_s=1.0)
@@ -333,6 +340,7 @@ def test_sil_watchdog_end_to_end_backup_charge_deploys(fc_exe, sil_base_cfg):
     assert after.any() and not res.log["sent"][after].any()     # no frames to a dead FC
 
 
+@pytest.mark.req("REQ-006")
 def test_sil_run_is_reproducible(fc_exe, sil_base_cfg):
     sil = SilConfig(seed=5, fc_exe=str(fc_exe), pre_launch_s=0.5, post_landing_s=0.5)
     a, b = run_sil(sil_base_cfg, sil), run_sil(sil_base_cfg, sil)

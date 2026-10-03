@@ -25,3 +25,12 @@ def fc_exe():
 def sil_base_cfg() -> FlightConfig:
     """Default config with the C6-7 backup charge used by every SIL scenario."""
     return sil_flight_config(FlightConfig.load(REPO_ROOT / "configs" / "default.json"))
+
+
+def pytest_collection_modifyitems(items):
+    """Copy @pytest.mark.req IDs into each test's user_properties, so they
+    appear in JUnit XML (--junitxml) for the traceability matrix."""
+    for item in items:
+        for marker in item.iter_markers("req"):
+            for rid in marker.args:
+                item.user_properties.append(("req", rid))

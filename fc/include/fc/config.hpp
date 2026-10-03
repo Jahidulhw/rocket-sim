@@ -90,6 +90,27 @@ struct FcConfig {
   // its fall.
   double backup_timer_s = 8.5;
 
+  // ---- Fault handling ----------------------------------------------------
+  // Stuck sensor: N bit-identical readings in a row. With baro noise 0.5 m and
+  // 0.1 m quantization, two live readings share a bin ~6 % of the time, so 10
+  // in a row happens by chance ~5e-12 per window; the accelerometer is sent to
+  // 1e-4 m/s^2, so 5 identical live readings are essentially impossible.
+  // (Readings at accelerometer full scale are exempt: saturation repeats.)
+  int stale_baro_samples = 10;
+  int stale_accel_samples = 5;
+  double accel_full_scale_mps2 = 24.0 * 9.81;
+  // Innovation gate (COAST only), in sigmas of the predicted innovation:
+  // 5 sigma rejects a good sample with probability ~6e-7, so nominal flights
+  // never lose data, while outliers of more than ~2.6 m (baro) or ~2.8 m/s^2
+  // (accel) are refused.
+  double kf_gate_sigma = 5.0;
+  // 25 consecutive rejections (0.25 s) = persistent disagreement, not an
+  // outlier: apogee detection is disabled and the backup timer decides.
+  int max_consecutive_rejections = 25;
+  // No apogee deploy until 2.5 s after launch (C6 burn: 1.86 s), regardless
+  // of what the burnout detector concluded.
+  double min_deploy_after_launch_s = 2.5;
+
   // ---- DESCENT -> LANDED ---------------------------------------------------
   // Landed when altitude stays within +-3 m of a reference sample for 5 s.
   // Under the chute the rocket sinks ~3.8 m/s and leaves a 3 m band in <1 s;

@@ -41,6 +41,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import REPO_ROOT, FlightConfig
+from .faults import Fault, FaultInjector
 from .flight import FlightResult, simulate
 from .protocol import ProtocolError, format_sensor_frame, parse_reply, time_matches
 from .sensors import SensorConfig, SensorSuite
@@ -100,8 +101,10 @@ class FcProcess:
         self._proc = subprocess.Popen(
             [str(self.exe), *self.args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, bufsize=0)
-        threading.Thread(target=self._pump_stdout, daemon=True).start()
-        threading.Thread(target=self._pump_stderr, daemon=True).start()
+        self._threads = [threading.Thread(target=self._pump_stdout, daemon=True),
+                         threading.Thread(target=self._pump_stderr, daemon=True)]
+        for th in self._threads:
+            th.start()
 
     def _pump_stdout(self):
         for raw in iter(self._proc.stdout.readline, b""):
@@ -143,6 +146,10 @@ class FcProcess:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait()
+        # The pipes are closed once the process is gone; let the reader threads
+        # drain the last lines (health diagnostics arrive on stderr).
+        for th in self._threads:
+            th.join(timeout=2.0)
         self.returncode = self._proc.returncode
         return self.returncode
 
@@ -163,10 +170,13 @@ class SilConfig:
     watchdog_timeout_s: float = 2.0
     pre_launch_s: float = 10.0         # pad sit before ignition (FC calibration, false-launch exposure)
     post_landing_s: float = 15.0       # at-rest frames after touchdown; FC needs 5-8 s to confirm landing
+    faults: tuple = ()                 # sim.faults.Fault instances
 
 
+# baro/accel are the values DELIVERED to the FC (after fault injection);
+# "faults" lists the fault labels active at that tick (";"-separated).
 LOG_FIELDS = ("t", "z_true", "vz_true", "az_true", "baro", "accel", "sent", "reply_ok",
-              "fc_state", "est_alt", "est_vel", "fc_deploy", "error")
+              "fc_state", "est_alt", "est_vel", "fc_deploy", "error", "faults")
 
 
 @dataclass
@@ -180,6 +190,12 @@ class SilResult:
     fc_deploy_t: float | None          # first tick the FC commanded deploy (even if the chute was already out)
     fc_returncode: int | None
     fc_stderr: list
+    faults: tuple = ()
+
+    @property
+    def fc_health_events(self) -> list:
+        """FC health diagnostics (stuck sensor, estimator inconsistent), in order."""
+        return [line for line in self.fc_stderr if "HEALTH" in line]
 
     @property
     def deploy_mechanism(self) -> str | None:
@@ -216,9 +232,10 @@ class SilResult:
 class SilLink:
     """simulate() controller: turns truth into sensor frames and FC replies into commands."""
 
-    def __init__(self, fc: FcProcess, sensors: SensorSuite):
+    def __init__(self, fc: FcProcess, sensors: SensorSuite, injector: FaultInjector | None = None):
         self.fc = fc
         self.sensors = sensors
+        self.injector = injector
         self.period_s = sensors.cfg.period_s
         self.in_flight_ticks = 0
         self.failed = False
@@ -237,12 +254,17 @@ class SilLink:
     def exchange(self, t: float, z: float, vz: float, az: float) -> bool:
         """One tick. Returns the FC's deploy command (False on any failure)."""
         baro, acc = self.sensors.sample(z, az)   # always drawn: keeps the noise stream aligned
+        send, active = True, []
+        if self.injector is not None:
+            send, baro, acc, active = self.injector.apply(t, baro, acc)
         row = {"t": t, "z_true": z, "vz_true": vz, "az_true": az, "baro": baro, "accel": acc,
                "sent": False, "reply_ok": False, "fc_state": "", "est_alt": np.nan,
-               "est_vel": np.nan, "fc_deploy": False, "error": ""}
+               "est_vel": np.nan, "fc_deploy": False, "error": "", "faults": ";".join(active)}
         command = False
         if self.failed:
             row["error"] = "fc_failed"
+        elif not send:
+            row["error"] = "dropped"       # injected: the frame never reaches the FC
         else:
             row["sent"] = True
             try:
@@ -274,10 +296,14 @@ def run_sil(cfg: FlightConfig, sil: SilConfig | None = None) -> SilResult:
     """Fly one closed-loop SIL flight (pad sit, flight, post-landing)."""
     sil = sil or SilConfig()
     sensors = SensorSuite(sil.sensors, np.random.default_rng(sil.seed))
+    # Separate stream for fault randomness, so faults never shift sensor noise.
+    injector = FaultInjector(sil.faults, np.random.default_rng([sil.seed, 0xFA17])) if sil.faults else None
     period = sensors.cfg.period_s
     args = ("--mode", sil.fc_mode, *sil.fc_args)
+    if injector is not None and injector.hang_at_s is not None:
+        args += ("--inject-hang-at", f"{injector.hang_at_s:.6f}")
     with FcProcess(find_fc_executable(sil.fc_exe), args, sil.watchdog_timeout_s) as fc:
-        link = SilLink(fc, sensors)
+        link = SilLink(fc, sensors, injector)
         # Ticks are k * period on one integer grid across all three segments,
         # so stamps never accumulate floating-point drift.
         n_pre = round(sil.pre_launch_s / period)
@@ -292,7 +318,26 @@ def run_sil(cfg: FlightConfig, sil: SilConfig | None = None) -> SilResult:
     return SilResult(flight=flight, log=link.log_arrays(), fc_failed=link.failed,
                      failure_t=link.failure_t, failure_reason=link.failure_reason,
                      protocol_errors=link.protocol_errors, fc_deploy_t=link.fc_deploy_t,
-                     fc_returncode=fc.returncode, fc_stderr=list(fc.stderr_lines))
+                     fc_returncode=fc.returncode, fc_stderr=list(fc.stderr_lines),
+                     faults=tuple(sil.faults))
+
+
+def run_pad_sit(duration_s: float = 60.0, sil: SilConfig | None = None) -> dict:
+    """Rocket sitting on the pad for duration_s with the FC powered (no ignition).
+    Returns the per-tick log plus FC health info; used for REQ-002."""
+    sil = sil or SilConfig()
+    sensors = SensorSuite(sil.sensors, np.random.default_rng(sil.seed))
+    args = ("--mode", sil.fc_mode, *sil.fc_args)
+    with FcProcess(find_fc_executable(sil.fc_exe), args, sil.watchdog_timeout_s) as fc:
+        link = SilLink(fc, sensors)
+        for k in range(round(duration_s / sensors.cfg.period_s)):
+            link.exchange(k * sensors.cfg.period_s, 0.0, 0.0, 0.0)
+        fc.close()
+    log = link.log_arrays()
+    return {"log": log, "false_launch": bool(np.any(log["fc_state"][log["reply_ok"]] != "PAD")),
+            "deploy": bool(log["fc_deploy"].any()), "fc_failed": link.failed,
+            "protocol_errors": link.protocol_errors,
+            "health_events": [s for s in fc.stderr_lines if "HEALTH" in s]}
 
 
 def sil_flight_config(base: FlightConfig) -> FlightConfig:

@@ -31,6 +31,14 @@ bool set_param(FcConfig& c, std::string_view key, double v) {
   if (key == "apogee_drop_m") return non_negative(c.apogee_drop_m);
   if (key == "apogee_samples") return as_count(c.apogee_samples);
   if (key == "backup_timer_s") return positive(c.backup_timer_s);
+  if (key == "kf_gate_sigma") return non_negative(c.kf_gate_sigma);  // 0 disables gating
+  if (key == "max_consecutive_rejections") return v == 0.0 ? (c.max_consecutive_rejections = 0, true)
+                                                           : as_count(c.max_consecutive_rejections);
+  if (key == "stale_baro_samples") return v == 0.0 ? (c.stale_baro_samples = 0, true)
+                                                   : as_count(c.stale_baro_samples);
+  if (key == "stale_accel_samples") return v == 0.0 ? (c.stale_accel_samples = 0, true)
+                                                    : as_count(c.stale_accel_samples);
+  if (key == "min_deploy_after_launch_s") return non_negative(c.min_deploy_after_launch_s);
   return false;
 }
 

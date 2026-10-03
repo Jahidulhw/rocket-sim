@@ -66,16 +66,27 @@ void Kalman3::predict(double dt) {
   symmetrise(P_);
 }
 
-UpdateResult Kalman3::update_baro(double h_meas) { return update_scalar(0, h_meas, r_baro_); }
-UpdateResult Kalman3::update_accel(double a_meas) { return update_scalar(2, a_meas, r_accel_); }
+UpdateResult Kalman3::update_baro(double h_meas, double gate_sigma) {
+  return update_scalar(0, h_meas, r_baro_, gate_sigma);
+}
+UpdateResult Kalman3::update_accel(double a_meas, double gate_sigma) {
+  return update_scalar(2, a_meas, r_accel_, gate_sigma);
+}
 
 // Scalar update for H = e_idx (a unit row vector). With diagonal R, two
 // sequential scalar updates equal one joint update, and S is a scalar, so
 // there is no matrix inverse anywhere in the filter.
-UpdateResult Kalman3::update_scalar(int idx, double z, double r) {
+UpdateResult Kalman3::update_scalar(int idx, double z, double r, double gate_sigma) {
   UpdateResult u;
   u.innovation = z - x_[idx];
   u.s = P_[idx][idx] + r;
+  // Innovation gate: S is what the filter EXPECTS the innovation variance to
+  // be. A measurement many sigma away is far more likely a sensor fault than
+  // a real event, so it is not allowed to move the state.
+  if (gate_sigma > 0.0 && u.innovation * u.innovation > gate_sigma * gate_sigma * u.s) {
+    u.accepted = false;
+    return u;
+  }
   Vec3 K{};
   for (int i = 0; i < 3; ++i) K[i] = P_[i][idx] / u.s;
   for (int i = 0; i < 3; ++i) x_[i] += K[i] * u.innovation;

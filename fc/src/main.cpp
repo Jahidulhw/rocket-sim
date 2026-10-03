@@ -89,6 +89,7 @@ int main(int argc, char** argv) {
     fc::Response r = runner.handle_line(line);
     switch (r.action) {
       case fc::Action::Reply:
+        for (const auto& d : r.diagnostics) std::cerr << "fc: " << d << std::endl;
         std::cout << r.line << '\n';
         std::cout.flush();  // the sim is blocked waiting for this line
         break;

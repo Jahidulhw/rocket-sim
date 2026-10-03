@@ -7,8 +7,8 @@ C++ and skips syntax.
 
 It is updated as each milestone lands:
 * State machine and baseline detector: milestone 2.
-* Kalman filter: milestone 3 (this version).
-* Faults and requirements: milestone 4.
+* Kalman filter: milestone 3.
+* Faults and requirements: milestone 4 (this version).
 
 **Scope.** The FC only detects flight events and commands parachute deployment.
 It has no guidance, steering, attitude control or targeting. Its single output
@@ -500,7 +500,7 @@ nominal flights per value, using `--param kf.jerk_psd=q`.
   integrated velocity is biased low, and it crosses zero *before* apogee. At
   q = 0.01 the FC deploys 44 ms early on every flight, and with a stronger
   mismatch it would be earlier still. A pytest locks this failure mode in
-  (`test_mistuned_process_noise_biases_velocity_and_deploys_early`).
+  (`test_mistuned_process_noise_biases_velocity_and_deploys_early`). Since milestone 4, the innovation-consistency check catches this mistuning: the stiff model keeps disagreeing with the barometer, so the FC declares itself inconsistent and deploys on the backup timer instead of early (`test_mistuned_filter_is_caught_by_consistency_check`).
 * **q too large: a random, benign error.** The filter trusts every
   accelerometer sample, and the estimate gets noisier.
 * **The plateau runs from 1 to 1000.** q = 10 sits two decades from either
@@ -541,7 +541,7 @@ the deliberate 5-sample confirmation window.
 
 Reproduce: `python scripts/run_sil.py --compare --seeds 50`.
 
-### 7.8 Known gap, closed in milestone 4
+### 7.8 Known gap (closed in milestone 4, see §8)
 
 A plain Kalman filter trusts every measurement. If the barometer **sticks**
 while the rocket climbs, the filter is told "altitude is constant", drags the
@@ -551,4 +551,195 @@ gating** for this.
 
 ## 8. Faults: detection and tolerance
 
-*Added in milestone 4.*
+Fault injection lives in [`sim/faults.py`](../sim/faults.py). Fault handling in
+the FC lives in `StateMachine::check_health` and `run_filter`
+([`fc/src/state_machine.cpp`](../fc/src/state_machine.cpp)).
+
+### 8.1 Fault model
+
+| Kind | Sensor | Effect while active | Typical test values |
+|---|---|---|---|
+| `dropout` | link | Frame not sent, with per-frame probability (1 = blackout) | 1.5 s blackout across apogee; 30 % random loss |
+| `stuck` | baro / accel | Value frozen at the first reading in the window | Frozen in boost (0.5 s) or coast (3 s, 5 s) |
+| `spike` | baro / accel | ± magnitude added with per-frame probability | Baro ±50 m, accel ±80 m/s², 10 % of frames |
+| `drift` | baro / accel | Bias growing linearly from start | Baro ±2 m/s; accel ±0.5 m/s² per s |
+| `hang` | FC | Process stops responding forever (`--inject-hang-at`) | On the pad, in boost, in coast, after deploy |
+
+**Fault randomness is isolated.** Which frames drop or spike, and the spike
+signs, come from a seeded stream that is separate from sensor noise. Every
+fault draws the same numbers every tick, active or not. A faulted run
+therefore differs from its nominal twin *only* by the fault, which a test
+checks (`test_faults_do_not_shift_sensor_noise`). That's what makes
+"nominal vs faulted" a controlled experiment.
+
+### 8.2 Innovation gating (outliers)
+
+For each measurement the filter already predicts what it expects to see, and
+how uncertain that prediction is:
+
+* innovation y = z − Hx,
+* innovation variance S = HPHᵀ + R.
+
+The gate rejects the measurement if **y² > 5² · S**, that is, if it lies more
+than 5σ from what the filter expects. A rejected measurement changes neither
+the state nor the covariance.
+
+**Why 5σ.**
+* For a correct filter, |y| > 5σ happens by chance about 6 × 10⁻⁷ of the
+  time. Nominal flights effectively never lose a good sample (no rejections
+  in 30 noisy test flights).
+* Outliers bigger than about 2.6 m (baro) or 2.8 m/s² (accel) are refused.
+* *Too tight* (2σ): about 5 % of good data is thrown away. Worse, ordinary
+  model mismatch (the filter's own lag) starts tripping the consecutive-
+  rejection limit below, and nominal flights would fall back to the timer.
+* *Too loose* (20σ): spikes of up to about 10 m leak in and kick the velocity
+  estimate.
+
+**Why gate only in COAST.** Ignition, burnout and the chute snatch are *real*
+steps in acceleration: about +200 m/s² at ignition and −80 m/s² at burnout.
+A gate would reject them as outliers, and then reject every following sample
+too, because the filter would never catch up. It would diverge exactly at
+burnout. In COAST the true motion is smooth (gravity plus slowly fading
+drag), so a big innovation there really does mean a bad measurement. COAST is
+also the only state where the apogee decision is made, so gating is applied
+exactly where it matters and nowhere it hurts.
+
+**Effect.** With 10 % of frames spiking (baro ±50 m or accel ±80 m/s²), the
+Kalman FC still deploys +0.05 s after apogee, the same as nominal. The
+raw-barometer baseline, fed the same spikes, deploys **seconds early**: one
+spike inflates its running maximum. That's the strongest single argument for
+the filter (`test_baseline_detector_is_fooled_by_baro_spikes`).
+
+### 8.3 Stuck sensors and graceful degradation
+
+**Detection.** The FC counts how many readings in a row are *bit-identical*.
+A live sensor with real noise essentially never repeats exactly:
+
+* **Barometer** (σ 0.5 m, 0.1 m steps): two readings share a step about 6 % of
+  the time. **10 in a row** happens by chance about 5 × 10⁻¹² per window.
+* **Accelerometer** (sent to 10⁻⁴ m/s²): **5 identical readings** are
+  essentially impossible when the sensor is live.
+* **Exception:** readings at accelerometer full scale (±24 g) never count.
+  A saturated accelerometer legitimately repeats its limit during a hot boost,
+  and must not be declared dead for it.
+
+**Degradation once a sensor is declared failed** (latched, logged as a
+`HEALTH` event):
+
+| Failed sensor | Kalman filter | Apogee decision | Launch / burnout | Landing |
+|---|---|---|---|---|
+| Barometer | Accelerometer only (dead reckoning, bias calibrated on the pad) | Kalman v < 0 | Accelerometer paths only | Not detected (no altitude) |
+| Accelerometer | Barometer only | **Baseline** raw-barometer detector | Baro launch backup; burnout via time + altitude fallback | Normal |
+
+**Measured.**
+* Barometer stuck at 3 s: the FC isolates it at 3.09 s, flies 4.3 s on the
+  accelerometer alone, and deploys +0.04–0.05 s after apogee. Dead reckoning
+  is good for a few seconds because the pad calibration removed the bias.
+* Accelerometer stuck in boost: detected, burnout comes from the fallback at
+  launch + 3 s, and apogee from the baseline at about +0.54 s.
+
+**Why a dedicated stuck detector instead of relying on the gate.** With two
+sensors, a gate alone can tell *that* they disagree, not *which one* is wrong.
+Consider an accelerometer stuck at a coast value:
+1. The filter's acceleration freezes, so velocity drifts away from the truth.
+2. The *correct* barometer now produces big innovations and gets gated.
+3. A rule like "blame the gated sensor" would throw away the good barometer
+   and keep the stuck accelerometer.
+
+The bit-identical test identifies the stuck sensor *directly*, independent of
+the filter.
+
+*Limitation:* a sensor that fails "noisily wrong" (alive, but offset) isn't
+caught by this. It is caught by 8.4 instead.
+
+### 8.4 Disagreement the FC can't isolate: fall back to the timer
+
+If either sensor is gated out for **25 frames in a row** (0.25 s) in COAST,
+that's not an outlier. Either that sensor or the estimate is persistently
+wrong, and with two sensors the FC can't always tell which.
+
+The FC then declares the estimator **inconsistent** (latched), disables apogee
+detection entirely (both the Kalman and the baseline detector), and lets the
+**backup timer** deploy at launch + 8.5 s.
+
+* *Why the timer and not "trust the barometer".* The barometer may be the
+  faulty one, for example after an offset jump. The timer is the only
+  decision source that depends on neither sensor. It is guaranteed to deploy,
+  and REQ-004 explicitly accepts it.
+* *Measured cost.* Accelerometer drift of ±0.5 m/s² per s (deliberately
+  exaggerated; real MEMS thermal drift is far slower) leads to an inconsistent
+  estimator, and the timer deploys at +1.13 s, 11 m/s descending. That is
+  inside REQ-004, and a much better outcome than trusting a drifting estimate.
+* *25 frames:* longer than the 10 frames the stuck detector needs, so a stuck
+  barometer is isolated (graceful degradation) *before* it could be declared
+  "inconsistent" (timer fallback).
+* *Rejected: re-sync after N rejections* (accept the measurement and reset
+  P). Against a stuck or offset sensor, that drags the filter onto the bad
+  value every N frames. It trades a safe, late deploy for an unsafe, possibly
+  early one.
+* *Rejected, but future work: a 4-state filter with an accelerometer-bias
+  state.* The barometer makes a slowly varying accelerometer bias observable,
+  so drift would be *estimated* instead of *tripping* the gate. It costs
+  tuning complexity, and it can mask a real accelerometer failure as "bias".
+  The static bias is already handled by the pad calibration.
+
+### 8.5 Per-fault summary
+
+Results are for seed 21, Kalman FC (12 fault cases in
+`test_sil_m4_faults.py`); Monte Carlo statistics are in the
+[verification report](verification_report.md).
+
+| Fault | How the FC detects / tolerates it | Outcome | Requirement |
+|---|---|---|---|
+| Blackout across apogee (1.5 s) | Kalman predicts across the gap (dt from timestamps); persistence counters reset on gaps | Deploys on the first frames after the gap, about +0.6 s | REQ-004 |
+| 30 % random frame loss | Same; dt-correct Q | About +0.08 s | REQ-004 |
+| Stuck barometer | Stuck detector → accelerometer-only filter | About +0.05 s | REQ-004 |
+| Stuck accelerometer | Stuck detector → baseline detector, burnout fallback | About +0.5 s | REQ-004 |
+| Baro / accel spikes | Innovation gate (COAST) | About +0.05 s | REQ-004 |
+| Baro drift ±2 m/s | Not detected. It looks like a velocity offset | −0.15 to +0.26 s | REQ-004 |
+| Accel drift ±0.5 m/s² per s | Persistent rejections → inconsistent → timer | Timer, +1.13 s | REQ-004 |
+| FC hang (any phase) | Simulator watchdog (no reply in 2 s) | Motor C6-7 charge deploys, about +1.4 s | REQ-005 |
+| Any fault in boost | Lockout (2 layers) + 2.5 s deploy inhibit | Never deploys in boost | REQ-003 |
+
+### 8.6 Redundancy: the motor charge is an independent backup
+
+The physics simulation keeps the motor's ejection charge active in every SIL
+run: burnout + 7 s for a C6-7, about 1.4 s after apogee. It doesn't depend on
+the FC in any way.
+
+Each flight logs **which mechanism deployed first**:
+`deployment["mechanism"]` is `fc` or `motor`, and the FC's own reason
+(`apogee` / `backup_timer`) comes from its reply stream.
+
+The result is three layers:
+1. the FC's apogee detector;
+2. the FC's backup timer, for detection failures;
+3. the motor charge, for a dead FC.
+
+Each layer covers the failure modes of the one above it. This mirrors real
+dual-deploy hobby practice.
+
+### 8.7 Deploy inhibit
+
+No apogee decision is accepted until **2.5 s after launch**, longer than the
+C6's 1.86 s burn, whatever the burnout detector concluded.
+
+* This is defence in depth for REQ-003. A fault that fakes burnout early (an
+  accelerometer dropout during boost, a negative drift) plus a fault that fakes
+  apogee would otherwise need only one more coincidence to fire under thrust.
+* The cost is nothing on real flights: apogee is about 7 s after launch.
+* *Too long* (say 8 s) would collide with the apogee time.
+* *Motor-specific:* a longer-burning motor needs this raised, like the timer.
+
+### 8.8 What is not handled (honest limits)
+
+* **Double faults.** Examples: barometer stuck *and* accelerometer drifting,
+  or a stuck accelerometer during baro spikes, where the baseline fallback has
+  no gate. Requirements are written for single faults.
+* **Slow barometer drift** shifts apogee timing by about drift/g. It's
+  undetectable from inside the FC without a third reference.
+* **No altitude after a barometer failure** means no landing detection.
+* **A false launch from an accelerometer that fails high on the pad** is safe
+  (no deploy), but it corrupts the timer's time base for a real launch later. A
+  pre-launch self-test (accelerometer reads 1 g ± 0.5 g, barometer steady,
+  before arming) is the right fix on hardware.

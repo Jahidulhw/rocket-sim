@@ -4,6 +4,11 @@
     python scripts/run_sil.py --seed 7 --mode baseline
     python scripts/run_sil.py --seeds 50              # deploy-timing statistics over 50 seeds
     python scripts/run_sil.py --compare --seeds 50    # baseline vs Kalman on identical seeds
+    python scripts/run_sil.py --fault stuck:3:inf:baro           # inject a fault
+    python scripts/run_sil.py --fault spike:0:20:accel:80:0.1 --fault hang:9
+
+Fault spec: kind:start[:duration[:sensor[:magnitude[:probability]]]], kinds
+dropout | stuck | spike | drift | hang (see sim/faults.py).
     python scripts/run_sil.py --set wind.speed_mps=6
 
 Single flight: prints FC events next to the true events, deploy timing and
@@ -28,6 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from sim.config import FlightConfig, apply_overrides  # noqa: E402
+from sim.faults import Fault  # noqa: E402
+from sim.requirements import REQUIREMENTS, evaluate  # noqa: E402
 from sim.sil import LOG_FIELDS, SilConfig, run_sil, sil_flight_config  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "out" / "sil"
@@ -66,8 +73,20 @@ def print_single(res, mode: str) -> None:
         print(f"FC command       : t = {res.fc_deploy_t:.3f} s (chute already out)")
     print(f"Apogee (true)    : {res.flight.apogee_m:.1f} m")
     print(f"Landed           : {res.flight.landed} at t = {res.flight.flight_time_s:.2f} s")
-    print(f"FC health        : {'FAILED at t = %.2f s (%s)' % (res.failure_t, res.failure_reason) if res.fc_failed else 'ok'}"
+    print(f"FC process       : {'FAILED at t = %.2f s (%s)' % (res.failure_t, res.failure_reason) if res.fc_failed else 'ok'}"
           f", protocol errors {res.protocol_errors}, exit code {res.fc_returncode}")
+    if res.faults:
+        print("Faults injected  : " + "; ".join(f"{f.label} from {f.start_s:g} s" +
+                                               ("" if f.kind == "hang" or f.duration_s == float("inf")
+                                                else f" for {f.duration_s:g} s") for f in res.faults))
+    for h in res.fc_health_events:
+        print(f"FC health event  : {h.removeprefix('fc: ')}")
+    print()
+    print("Requirement verdicts (this run):")
+    for rid, v in evaluate(res).items():
+        print(f"  {rid}  {v.status.upper():<4}  {v.detail}")
+        if v.status != "n/a":
+            print(f"           {REQUIREMENTS[rid]}")
 
 
 def write_log_csv(res, path: Path) -> Path:
@@ -127,11 +146,13 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--seeds", type=int, default=0, help="run this many seeds (seed, seed+1, ...) and report statistics")
     ap.add_argument("--fc-exe", default=None)
+    ap.add_argument("--fault", action="append", default=[], metavar="SPEC", help="inject a fault (repeatable)")
     args = ap.parse_args(argv)
     cfg = build_config(args)
 
     if args.seeds <= 0:
-        res = run_sil(cfg, SilConfig(seed=args.seed, fc_exe=args.fc_exe, fc_mode=args.mode))
+        faults = tuple(Fault.parse(f) for f in args.fault)
+        res = run_sil(cfg, SilConfig(seed=args.seed, fc_exe=args.fc_exe, fc_mode=args.mode, faults=faults))
         print_single(res, args.mode)
         print(f"Log              : {write_log_csv(res, OUT_DIR / 'sil_log.csv').relative_to(REPO_ROOT)}")
         return 0

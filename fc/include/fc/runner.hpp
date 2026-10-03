@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "fc/config.hpp"
 #include "fc/protocol.hpp"
@@ -22,6 +23,7 @@ enum class Action {
 struct Response {
   Action action = Action::Reply;
   std::string line;
+  std::vector<std::string> diagnostics;  // health events, for stderr only
 };
 
 enum class Mode {

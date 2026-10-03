@@ -32,6 +32,7 @@ def test_fc_deploys_at_apogee_and_rocket_lands(nominal_run):
     assert 0.0 < dt < 1.2                        # baseline: after apogee, not by much
 
 
+@pytest.mark.req("REQ-010")
 def test_fc_events_track_truth(nominal_run):
     r, ev = nominal_run, nominal_run.flight.events
     st = r.fc_state_times()
@@ -40,6 +41,7 @@ def test_fc_events_track_truth(nominal_run):
     assert 4.0 < st["LANDED"] - ev["landing"].t < 10.0
 
 
+@pytest.mark.req("REQ-003")
 def test_no_deploy_command_in_pad_or_boost(nominal_run):
     log = nominal_run.log
     locked = np.isin(log["fc_state"], ["PAD", "BOOST"])
@@ -80,6 +82,7 @@ def test_baseline_deploy_timing_under_nominal_noise(fc_exe, sil_base_cfg, record
     assert np.all(dts < 1.2)      # ...but well before the motor backup (~+1.4 s)
 
 
+@pytest.mark.req("REQ-009")
 def test_backup_timer_does_not_preempt_nominal_detection(fc_exe, sil_base_cfg):
     """The 8.5 s timer is a backup: on a nominal flight the detector must win.
     (The timer path itself is covered by C++ unit tests, and end-to-end under
