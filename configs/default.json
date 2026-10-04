@@ -2,7 +2,13 @@
   "rocket": {
     "dry_mass_kg": 0.04,
     "body_diameter_m": 0.0248,
-    "cd": 0.75
+    "cd": 0.75,
+    "drag_model": "constant",
+    "mach_critical": 0.8,
+    "mach_peak": 1.1,
+    "cd_peak_factor": 1.9,
+    "mach_supersonic": 2.0,
+    "cd_supersonic_factor": 1.35
   },
   "motor": {
     "kind": "eng",
@@ -36,7 +42,11 @@
     "chute_diameter_m": 0.305,
     "chute_cd": 0.8,
     "deploy_delay_s": null,
-    "near_apogee_window_s": 1.0
+    "near_apogee_window_s": 1.0,
+    "main_diameter_m": null,
+    "main_cd": 0.8,
+    "main_deploy_altitude_m": null,
+    "backup_timer_s": null
   },
   "sim": {
     "dt_s": 0.005,

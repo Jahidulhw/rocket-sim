@@ -34,5 +34,11 @@ jobs:
 
       # The SIL tests find fc/build/flight_computer automatically; they fail
       # (never skip) if it is missing.
-      - name: Python tests (physics + SIL)
+      - name: Python tests (physics + SIL + fleet)
         run: python -m pytest -v
+
+      # Generates every viewer dataset, including one closed-loop SIL flight
+      # per fleet preset (staging, dual deploy) on this Linux/g++ build, and
+      # enforces the site-size budget.
+      - name: Build viewer datasets
+        run: python scripts/build_site.py

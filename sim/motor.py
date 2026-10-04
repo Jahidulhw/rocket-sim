@@ -115,6 +115,40 @@ class ThrustCurveMotor:
                 "curve": {"t": self.times.tolist(), "thrust_n": self.thrusts.tolist()}}
 
 
+class DelayedMotor:
+    """A motor whose ignition is delayed to absolute time `ignition_time`.
+
+    Passive staging: the sustainer motor lights at a fixed, pre-set delay after
+    booster burnout (like a hobby booster burning through into the sustainer,
+    or a pre-set timer), never on a flight-computer command. Times are
+    shifted; burn_time is the ABSOLUTE burnout time, so ejection delays and
+    the run loop's burnout logic work unchanged.
+    """
+
+    def __init__(self, motor, ignition_time: float):
+        self.inner = motor
+        self.ignition_time = float(ignition_time)
+        self.name = getattr(motor, "name", "")
+        self.burn_time = self.ignition_time + motor.burn_time
+        self.total_mass = motor.total_mass
+        self.propellant_mass = motor.propellant_mass
+        self.total_impulse = motor.total_impulse
+        self.ejection_delay_s = getattr(motor, "ejection_delay_s", None)
+
+    def thrust(self, t: float) -> float:
+        return self.inner.thrust(t - self.ignition_time)
+
+    def mass_flow(self, t: float) -> float:
+        return self.inner.mass_flow(t - self.ignition_time)
+
+    def breakpoints(self) -> list[float]:
+        return [self.ignition_time] + [self.ignition_time + b for b in self.inner.breakpoints()]
+
+    def info(self) -> dict:
+        d = self.inner.info() if hasattr(self.inner, "info") else {"name": self.name}
+        return {**d, "ignition_time_s": self.ignition_time}
+
+
 def _parse_delays(token: str) -> list[float]:
     """'0-3-5-7' -> [0, 3, 5, 7]; 'P' (plugged, no ejection charge) -> []."""
     if token.upper().startswith("P"):

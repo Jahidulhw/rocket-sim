@@ -48,6 +48,9 @@ class Kalman3 {
   bool initialized() const { return init_; }
 
   void predict(double dt);
+  // Process noise for subsequent predictions (jerk PSD q, m^2/s^5).
+  void set_jerk_psd(double q) { cfg_.jerk_psd = q; }
+  double jerk_psd() const { return cfg_.jerk_psd; }
   // gate_sigma > 0 enables innovation gating: the measurement is rejected
   // (no state or covariance change) if |innovation| > gate_sigma * sqrt(S),
   // i.e. a chi-square test with 1 degree of freedom.

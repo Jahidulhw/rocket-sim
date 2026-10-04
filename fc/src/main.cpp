@@ -64,6 +64,8 @@ bool parse_args(int argc, char** argv, fc::RunnerOptions& opts) {
         std::cerr << "invalid --param: " << kv << "\n";
         return false;
       }
+    } else if (a == "--trace") {
+      opts.config.trace = true;   // debug: per-frame filter internals on stderr
     } else if (a == "--help" || a == "-h") {
       usage();
       return false;

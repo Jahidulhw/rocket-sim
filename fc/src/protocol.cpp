@@ -81,7 +81,7 @@ std::string format_reply(const Reply& r) {
   const std::string_view s = to_string(r.state);
   const std::string state(s);
   return printf_string("R %.6f %s %.3f %.3f %d", r.t, state.c_str(), r.est_alt_m, r.est_vel_mps,
-                       r.deploy ? 1 : 0);
+                       (r.deploy ? 1 : 0) | (r.deploy_main ? 2 : 0));
 }
 
 std::string format_error(std::string_view reason) {

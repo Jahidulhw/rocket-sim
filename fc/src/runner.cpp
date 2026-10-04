@@ -23,10 +23,10 @@ Response Runner::handle_line(std::string_view line) {
   last_t_ = f.t;
 
   if (opts_.mode == Mode::Stub) {
-    return {Action::Reply, format_reply(Reply{f.t, FlightState::Pad, f.baro_alt_m, 0.0, false}), {}};
+    return {Action::Reply, format_reply(Reply{f.t, FlightState::Pad, f.baro_alt_m, 0.0, false, false}), {}};
   }
   const FcOutput o = sm_.update(f);
-  return {Action::Reply, format_reply(Reply{f.t, o.state, o.est_alt_m, o.est_vel_mps, o.deploy}),
+  return {Action::Reply, format_reply(Reply{f.t, o.state, o.est_alt_m, o.est_vel_mps, o.deploy, o.deploy_main}),
           sm_.take_diagnostics()};
 }
 

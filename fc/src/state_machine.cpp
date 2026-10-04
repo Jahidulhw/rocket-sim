@@ -38,7 +38,9 @@ StateMachine::StateMachine(FcConfig cfg)
       launch_baro_(cfg.launch_baro_samples),
       burnout_(cfg.burnout_samples),
       apogee_baro_(cfg.apogee_samples),
-      apogee_kf_(cfg.kalman_apogee_samples) {}
+      apogee_kf_(cfg.kalman_apogee_samples),
+      ignition_(cfg.next_ignition_samples),
+      main_p_(cfg.main_samples) {}
 
 std::vector<std::string> StateMachine::take_diagnostics() {
   std::vector<std::string> out;
@@ -105,7 +107,9 @@ FcOutput StateMachine::update(const SensorFrame& f) {
   out.est_vel_mps = use_kf ? kf_.x()[1] : 0.0;
   // Boost lockout, enforced at the output as well as by construction (only
   // COAST can command a deploy): no code path may fire in PAD or BOOST.
-  out.deploy = deploy_ && state_ != FlightState::Pad && state_ != FlightState::Boost;
+  const bool unlocked = state_ != FlightState::Pad && state_ != FlightState::Boost && !awaiting_;
+  out.deploy = deploy_ && unlocked;
+  out.deploy_main = main_ && unlocked;
   return out;
 }
 
@@ -129,12 +133,18 @@ void StateMachine::run_filter(double dt, const SensorFrame& f, double agl) {
     kf_.init(agl);
     return;
   }
+  // Powered flight and tail-off: fast-changing acceleration -> powered q.
+  const bool powered = state_ == FlightState::Boost ||
+                       (burns_done_ > 0 && f.t - last_burnout_t_ < cfg_.tailoff_s && state_ == FlightState::Coast);
+  const double q_powered = cfg_.powered_jerk_psd > 0.0 ? cfg_.powered_jerk_psd : cfg_.kf.jerk_psd;
+  kf_.set_jerk_psd(powered ? q_powered : cfg_.kf.jerk_psd);
   kf_.predict(dt);
   // Gate only in COAST. Ignition, burnout and the chute snatch are REAL steps
   // in acceleration that a gate would reject (and the filter would then never
   // follow them); in COAST the true motion is smooth, so a large innovation
   // means a bad measurement.
-  const double gate = state_ == FlightState::Coast ? cfg_.kf_gate_sigma : 0.0;
+  // Not while awaiting the next burn either: the sustainer's thrust step is real.
+  const double gate = (state_ == FlightState::Coast && !awaiting_) ? cfg_.kf_gate_sigma : 0.0;
   if (!baro_failed_) {
     const UpdateResult r = kf_.update_baro(agl, gate);
     baro_rejected_run_ = r.accepted ? 0 : baro_rejected_run_ + 1;
@@ -144,6 +154,13 @@ void StateMachine::run_filter(double dt, const SensorFrame& f, double agl) {
     const UpdateResult r = kf_.update_accel(f.accel_mps2 - accel_ref_, gate);  // kinematic, bias removed
     accel_rejected_run_ = r.accepted ? 0 : accel_rejected_run_ + 1;
     accel_rejected_total_ += r.accepted ? 0 : 1;
+    if (cfg_.trace) {
+      char buf[200];
+      std::snprintf(buf, sizeof buf, "TRACE %s h=%.2f v=%.2f a=%.2f Paa=%.3g gate=%.0f accel_innov=%.2f S=%.3g %s",
+                    std::string(to_string(state_)).c_str(), kf_.x()[0], kf_.x()[1], kf_.x()[2], kf_.P()[2][2], gate,
+                    r.innovation, r.s, r.accepted ? "ok" : "REJECT");
+      diag(f.t, buf);
+    }
   }
   // A sensor that disagrees with the filter for a sustained run is not an
   // outlier: either it or the estimate is wrong, and with two sensors the FC
@@ -167,6 +184,7 @@ void StateMachine::on_pad(const SensorFrame& f, double agl) {
   if (!by_accel && !by_baro) return;
   // Launch time = start of the confirming run, not the confirmation sample.
   launch_t_ = by_accel ? launch_accel_.first_t() : launch_baro_.first_t();
+  boost_start_t_ = *launch_t_;
   max_agl_ = agl;
   state_ = FlightState::Boost;
 }
@@ -177,13 +195,43 @@ void StateMachine::on_boost(const SensorFrame& f, double agl) {
   // Stuck-accelerometer fallback; the altitude condition means a false
   // launch on the pad can never get out of BOOST into a deployable state.
   const bool fallback =
-      !baro_failed_ && f.t - *launch_t_ > cfg_.max_boost_s && agl > cfg_.burnout_fallback_agl_m;
-  if (burnout || fallback) state_ = FlightState::Coast;
+      !baro_failed_ && f.t - boost_start_t_ > cfg_.max_boost_s && agl > cfg_.burnout_fallback_agl_m;
+  if (!(burnout || fallback)) return;
+  state_ = FlightState::Coast;
+  ++burns_done_;
+  last_burnout_t_ = f.t;
+
+  burnout_.reset();
+  ignition_.reset();
+  awaiting_ = burns_done_ < cfg_.burns;
+  // Fresh gating statistics for the new coast segment.
+  baro_rejected_run_ = accel_rejected_run_ = 0;
+  if (awaiting_) diag(f.t, "STAGING burnout " + std::to_string(burns_done_) + " of " +
+                               std::to_string(cfg_.burns) + ": awaiting next ignition (deployment locked out)");
 }
 
 void StateMachine::on_coast(const SensorFrame& f, double agl) {
   const double gap = cfg_.max_frame_gap_s;
   const double since_launch = f.t - *launch_t_;
+
+  // Thrust while coasting = a motor is burning (the expected sustainer, or a
+  // late/unexpected one): back to BOOST, where deployment is locked out.
+  if (ignition_.update(!accel_failed_ && f.accel_mps2 > cfg_.next_ignition_accel_mps2, f.t, gap)) {
+    state_ = FlightState::Boost;
+    boost_start_t_ = ignition_.first_t();
+
+    if (!awaiting_) diag(f.t, "STAGING unexpected thrust in coast: back to BOOST (deployment locked out)");
+    awaiting_ = false;
+    apogee_kf_.reset();
+    apogee_baro_.reset();
+    return;
+  }
+  if (awaiting_) {
+    if (f.t - last_burnout_t_ < cfg_.stage_ignition_timeout_s) return;   // gap lockout
+    awaiting_ = false;
+    diag(f.t, "STAGING no ignition within " + std::to_string(cfg_.stage_ignition_timeout_s).substr(0, 4) +
+                  " s of burnout: continuing as the final coast");
+  }
   // Deploy inhibit: no apogee decision until well after the longest expected
   // burn, whatever the burnout detector concluded (defence in depth).
   const bool armed = since_launch >= cfg_.min_deploy_after_launch_s;
@@ -212,6 +260,16 @@ void StateMachine::on_coast(const SensorFrame& f, double agl) {
 }
 
 void StateMachine::on_descent(const SensorFrame& f, double /*agl*/) {
+  // Dual deploy: main below its altitude (estimate) for main_samples frames.
+  if (cfg_.main_deploy_altitude_m > 0.0 && deploy_ && !main_) {
+    if (baro_failed_) {
+      main_ = true;   // no altitude source: main now (with/after the drogue)
+      diag(f.t, "MAIN commanded with the drogue: barometer failed, no altitude for the main event");
+    } else {
+      const double h = cfg_.apogee_mode == ApogeeMode::Kalman ? kf_.x()[0] : land_filt_m_;
+      if (main_p_.update(h < cfg_.main_deploy_altitude_m, f.t, cfg_.max_frame_gap_s)) main_ = true;
+    }
+  }
   if (baro_failed_) return;  // no altitude, no landing detection (not safety-relevant)
   // Landed = filtered altitude stays within +-band of a reference for the
   // duration. Leaving the band, or a frame gap, restarts the window.

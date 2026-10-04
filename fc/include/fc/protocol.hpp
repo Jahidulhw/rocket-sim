@@ -4,7 +4,9 @@
 //
 //   Sim -> FC:  "S <t> <baro_alt_m> <accel_mps2>"   one per sensor tick
 //               "END"                               orderly shutdown
-//   FC -> Sim:  "R <t> <state> <est_alt> <est_vel> <deploy 0|1>"
+//   FC -> Sim:  "R <t> <state> <est_alt> <est_vel> <deploy 0-3>"
+//               deploy is a bitmask: 1 = drogue/primary chute, 2 = main chute
+//               (dual deploy); a single-deploy rocket only ever sends 0 or 1
 //               "E <reason>"                        input line rejected
 //
 // Parsing is strict on purpose: single-space separators, exact field count,
@@ -43,7 +45,8 @@ struct Reply {
   FlightState state = FlightState::Pad;
   double est_alt_m = 0.0;
   double est_vel_mps = 0.0;
-  bool deploy = false;
+  bool deploy = false;       // primary (drogue) chute commanded
+  bool deploy_main = false;  // main chute commanded (dual deploy)
 };
 
 // Both return the line WITHOUT the trailing newline.

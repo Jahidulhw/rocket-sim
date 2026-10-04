@@ -1,0 +1,145 @@
+{
+ "generated_by": "scripts/make_regression_baseline.py",
+ "commit": "f28c3db",
+ "open_loop": {
+  "apogee_m": 313.7281010577504,
+  "apogee_t": 7.235994027172927,
+  "landing_xy": [
+   175.0006219748338,
+   1.0715697577516419e-14
+  ],
+  "flight_time_s": 89.75502544111552,
+  "max_speed_mps": 101.6672805392664,
+  "burnout_t": 1.86,
+  "deploy_t": 6.86,
+  "deploy_speed_mps": 5.769544222812258,
+  "timing": "near",
+  "z_at": {
+   "0.5": 10.787410113720957,
+   "1.0": 38.82980732229835,
+   "2.0": 127.24762991679549,
+   "4.0": 251.9477957809661,
+   "7.0": 313.43643574256305,
+   "20.0": 265.7702188283982,
+   "60.0": 112.95253970723259
+  }
+ },
+ "montecarlo_20": {
+  "apogee_mean_m": 315.7397773636179,
+  "landing_mean_m": [
+   137.79273282052108,
+   25.303006322279906
+  ],
+  "drift_p95_m": 232.20859542667426
+ },
+ "sil_open_loop": {
+  "apogee_m": 314.41916678062006,
+  "apogee_t": 7.4176103430148,
+  "landing_xy": [
+   171.80652735864368,
+   1.0520115690121472e-14
+  ],
+  "flight_time_s": 88.34316983910098,
+  "max_speed_mps": 101.6672805392664,
+  "burnout_t": 1.86,
+  "deploy_t": 8.86,
+  "deploy_speed_mps": 13.880083709232132,
+  "timing": "after",
+  "z_at": {
+   "0.5": 10.787410113720957,
+   "1.0": 38.82980732229835,
+   "2.0": 127.24762991679549,
+   "4.0": 251.9477957809661,
+   "7.0": 313.5627580840367,
+   "20.0": 260.35708354534546,
+   "60.0": 107.57913208579961
+  }
+ },
+ "sil": {
+  "kalman_seed1": {
+   "fc_deploy_t": 7.46,
+   "reason": "apogee",
+   "mechanism": "fc",
+   "state_times": {
+    "PAD": -10.0,
+    "BOOST": 0.08,
+    "COAST": 1.8800000000000001,
+    "APOGEE": 7.46,
+    "DESCENT": 7.47,
+    "LANDED": 95.43
+   },
+   "health": [],
+   "est_alt_at_deploy": 314.326,
+   "verdicts": {
+    "REQ-001": "pass",
+    "REQ-003": "pass",
+    "REQ-004": "n/a",
+    "REQ-005": "n/a",
+    "REQ-009": "pass",
+    "REQ-010": "pass"
+   },
+   "apogee_m": 314.419166782258,
+   "landing_xy": [
+    175.59200263761642,
+    1.0751909199301846e-14
+   ]
+  },
+  "baseline_seed1": {
+   "fc_deploy_t": 7.65,
+   "reason": "apogee",
+   "mechanism": "fc",
+   "state_times": {
+    "PAD": -10.0,
+    "BOOST": 0.08,
+    "COAST": 1.8800000000000001,
+    "APOGEE": 7.65,
+    "DESCENT": 7.66,
+    "LANDED": 95.06
+   },
+   "health": [],
+   "est_alt_at_deploy": 313.673,
+   "verdicts": {
+    "REQ-001": "pass",
+    "REQ-003": "pass",
+    "REQ-004": "n/a",
+    "REQ-005": "n/a",
+    "REQ-009": "pass",
+    "REQ-010": "pass"
+   },
+   "apogee_m": 314.419166782258,
+   "landing_xy": [
+    175.53787907578004,
+    1.0748595086963784e-14
+   ]
+  },
+  "kalman_stuck_baro_seed2": {
+   "fc_deploy_t": 7.48,
+   "reason": "apogee",
+   "mechanism": "fc",
+   "state_times": {
+    "PAD": -10.0,
+    "BOOST": 0.09,
+    "COAST": 1.8800000000000001,
+    "APOGEE": 7.48,
+    "DESCENT": 7.49
+   },
+   "health": [
+    "baro FAILED (stuck: 10 identical readings); excluded from estimation and detection"
+   ],
+   "est_alt_at_deploy": 314.822,
+   "verdicts": {
+    "REQ-001": "n/a",
+    "REQ-003": "pass",
+    "REQ-004": "pass",
+    "REQ-005": "n/a",
+    "REQ-009": "n/a",
+    "REQ-010": "n/a"
+   },
+   "apogee_m": 314.419166782258,
+   "landing_xy": [
+    175.59040755073084,
+    1.0751811528399408e-14
+   ]
+  }
+ }
+}

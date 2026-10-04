@@ -21,7 +21,8 @@ struct FcOutput {
   FlightState state = FlightState::Pad;
   double est_alt_m = 0.0;    // above the ground reference
   double est_vel_mps = 0.0;  // Kalman estimate; baseline mode has none and reports 0
-  bool deploy = false;       // latched: stays true once commanded
+  bool deploy = false;       // primary (drogue) chute; latched: stays true once commanded
+  bool deploy_main = false;  // main chute (dual deploy); latched
 };
 
 // "Condition held for N consecutive samples", where a frame gap longer than
@@ -77,6 +78,9 @@ class StateMachine {
   bool accel_failed() const { return accel_failed_; }
   bool estimator_inconsistent() const { return inconsistent_; }
   int baro_rejections_total() const { return baro_rejected_total_; }
+  int burns_detected() const { return burns_done_ + (state_ == FlightState::Boost ? 1 : 0); }
+  bool awaiting_ignition() const { return awaiting_; }
+  bool main_commanded() const { return main_; }
   int accel_rejections_total() const { return accel_rejected_total_; }
 
   // Human-readable health events since the last call (main.cpp prints them
@@ -122,7 +126,14 @@ class StateMachine {
   Persistence burnout_;
   Persistence apogee_baro_;
   Persistence apogee_kf_;
+  Persistence ignition_;
+  Persistence main_p_;
   std::optional<double> launch_t_;
+  double boost_start_t_ = 0.0;   // start of the current burn
+  int burns_done_ = 0;           // burnouts seen
+  double last_burnout_t_ = 0.0;
+  bool awaiting_ = false;        // more burns expected: gap lockout
+  bool main_ = false;
   double max_agl_ = 0.0;
 
   bool land_filt_init_ = false;

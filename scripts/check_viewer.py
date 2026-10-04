@@ -114,6 +114,16 @@ def main(argv=None) -> int:
             print(f"  [{'PASS' if ok else 'FAIL'}] {ds['id']:<12} status={attrs.get('status')} "
                   f"rendered={attrs.get('rendered')} errors={attrs.get('errors')} "
                   f"{'' if ok else attrs.get('error-log', '')}")
+            data = json.loads((WEB / "data" / ds["file"]).read_text(encoding="utf-8"))
+            if data.get("booster"):
+                t_sep = next(e["t"] for e in data["events"] if e["name"] == "separation")
+                before = body_attrs(run_browser(browser, f"{base}?data={ds['id']}&t={t_sep - 0.5:.2f}", profile))
+                after = body_attrs(run_browser(browser, f"{base}?data={ds['id']}&t={t_sep + 6:.2f}", profile))
+                gap0, gap1 = float(before.get("booster-gap", "nan")), float(after.get("booster-gap", "nan"))
+                sok = gap0 == 0.0 and gap1 > 50.0
+                failures += not sok
+                print(f"  [{'PASS' if sok else 'FAIL'}] {ds['id']:<12} staging: stacked before separation "
+                      f"(gap {gap0:g} m), apart 6 s after (gap {gap1:g} m)")
             if args.screenshots:
                 Path(args.screenshots).mkdir(parents=True, exist_ok=True)
                 run_browser(browser, f"{base}?data={ds['id']}&t=5", profile,

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -22,7 +23,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 class RocketConfig:
     dry_mass_kg: float = 0.040        # airframe + recovery, WITHOUT motor
     body_diameter_m: float = 0.0248   # sets the drag reference area
-    cd: float = 0.75                  # body drag coefficient (power-on and coast)
+    cd: float = 0.75                  # body drag coefficient (power-on and coast); subsonic value if "mach"
+    drag_model: str = "constant"      # "constant": Cd = cd always; "mach": Cd(M) curve, see sim/aero.py
+    mach_critical: float = 0.8        # "mach" only: end of the subsonic plateau
+    mach_peak: float = 1.1            # "mach" only: Mach number of peak drag
+    cd_peak_factor: float = 1.9       # "mach" only: peak Cd / cd
+    mach_supersonic: float = 2.0      # "mach" only: end of the supersonic decline
+    cd_supersonic_factor: float = 1.35  # "mach" only: Cd / cd beyond mach_supersonic
 
 
 @dataclass
@@ -54,6 +61,17 @@ class RecoveryConfig:
     chute_cd: float = 0.8             # flat plastic hobby chute (typical 0.75-0.8)
     deploy_delay_s: float | None = None   # after burnout; None = use motor.ejection_delay_s
     near_apogee_window_s: float = 1.0     # |t_deploy - t_apogee| <= this counts as "near"
+    # Dual deploy (optional): the chute above becomes the DROGUE, deployed at
+    # apogee; the MAIN opens low, at main_deploy_altitude_m above the pad on the
+    # way down (open loop: ideal altimeter; SIL: commanded by the FC).
+    main_diameter_m: float | None = None
+    main_cd: float = 0.8
+    main_deploy_altitude_m: float | None = None
+    # Independent backup deployment by a pre-set timer (seconds after ignition),
+    # for high-power rockets whose longest motor delay would fire before apogee:
+    # the motor is flown plugged and this passive device backs up the flight
+    # computer instead of the ejection charge. None = no such device.
+    backup_timer_s: float | None = None
 
 
 @dataclass
@@ -102,12 +120,26 @@ class FlightConfig:
             raise ValueError("launch.rail_length_m must be >= 0")
         if self.rocket.dry_mass_kg <= 0:
             raise ValueError("rocket.dry_mass_kg must be positive")
+        if self.rocket.drag_model not in ("constant", "mach"):
+            raise ValueError(f"unknown rocket.drag_model {self.rocket.drag_model!r}; expected 'constant' or 'mach'")
+        if self.rocket.drag_model == "mach":
+            mach_drag_params(self.rocket).validate()
         if self.motor.kind not in ("constant", "eng"):
             raise ValueError(f"unknown motor kind {self.motor.kind!r}")
         if self.wind.speed_mps < 0 or self.wind.reference_height_m <= 0:
             raise ValueError("wind speed must be >= 0 and reference height > 0")
         if self.recovery.chute_diameter_m <= 0 or self.recovery.chute_cd <= 0:
             raise ValueError("chute diameter and Cd must be positive")
+        rec = self.recovery
+        if rec.backup_timer_s is not None and rec.backup_timer_s <= 0:
+            raise ValueError("recovery.backup_timer_s must be positive")
+        if (rec.main_diameter_m is None) != (rec.main_deploy_altitude_m is None):
+            raise ValueError("dual deploy needs both recovery.main_diameter_m and recovery.main_deploy_altitude_m")
+        if rec.main_diameter_m is not None:
+            if rec.main_diameter_m <= 0 or rec.main_cd <= 0 or rec.main_deploy_altitude_m <= 0:
+                raise ValueError("main chute diameter, Cd and deploy altitude must be positive")
+            if rec.main_diameter_m * math.sqrt(rec.main_cd) <= rec.chute_diameter_m * math.sqrt(rec.chute_cd):
+                raise ValueError("the main chute must have more drag area than the drogue")
         if self.atmosphere.model not in ("isa", "vacuum"):
             raise ValueError(f"unknown atmosphere model {self.atmosphere.model!r}")
 
@@ -134,6 +166,12 @@ class FlightConfig:
 
     def copy(self) -> "FlightConfig":
         return copy.deepcopy(self)
+
+
+def mach_drag_params(r: RocketConfig):
+    """The rocket's Cd(M) shape as a sim.aero.MachDrag."""
+    from .aero import MachDrag
+    return MachDrag(r.mach_critical, r.mach_peak, r.cd_peak_factor, r.mach_supersonic, r.cd_supersonic_factor)
 
 
 def _build(sub_cls, d: dict, section: str):

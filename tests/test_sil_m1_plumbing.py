@@ -121,7 +121,8 @@ def test_parse_reply_valid_and_crlf():
     "R 1.0 PAD 0 0 0 0",          # too many fields
     "R 1.0 FOO 0 0 0",            # unknown state
     "R 1.0 pad 0 0 0",            # case sensitive
-    "R 1.0 PAD 0 0 2",            # deploy must be 0 or 1
+    "R 1.0 PAD 0 0 4",            # deploy is a 2-bit mask: 0-3 only (1 drogue, 2 main)
+    "R 1.0 PAD 0 0 9",
     "R 1.0 PAD 0 0 yes",
     "R nan PAD 0 0 0",
     "R 1.0 PAD inf 0 0",
@@ -135,6 +136,14 @@ def test_parse_reply_valid_and_crlf():
 def test_parse_reply_rejects_malformed(bad):
     with pytest.raises(ProtocolError):
         parse_reply(bad)
+
+
+def test_parse_reply_deploy_bitmask():
+    r = parse_reply("R 1.000000 DESCENT 290.000 -20.000 3")
+    assert r.deploy and r.deploy_main and r.command == 3
+    r = parse_reply("R 1.000000 DESCENT 290.000 -20.000 2")
+    assert not r.deploy and r.deploy_main and r.command == 2
+    assert parse_reply("R 1.000000 COAST 100.000 5.000 0").command == 0
 
 
 def test_time_matches_tolerance():

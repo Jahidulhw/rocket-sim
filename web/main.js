@@ -67,7 +67,7 @@ function showError(message) {
 function clearError() { ui.error.hidden = true; ui.error.textContent = ""; }
 
 // URL parameters (handy for sharing a view and for headless checks):
-//   ?data=<id>  ?t=<seconds> (starts paused there)  ?cam=follow
+//   ?data=<id>  ?t=<seconds> (starts paused there)  ?cam=follow  ?dist=<m> (follow distance)
 const params = new URLSearchParams(location.search);
 
 // ---------------------------------------------------------------- theme ----
@@ -297,6 +297,86 @@ function buildRocket() {
   flame.position.y = -4.2;
   g.add(flame);
   return { group: g, flame };
+}
+
+// Procedural model from the rocket's real geometry (configs/rockets/*.json),
+// in the same convention as buildRocket: along +Y, total length 8 units.
+// Radial sizes (body radius, fin span/thickness) are exaggerated x2.5: real
+// high-power rockets are so slender (L/D ~ 30) that at true proportions the
+// body is a pixel wide even though the whole model is drawn enlarged. A fixed
+// factor keeps the RELATIVE slenderness between rockets visible.
+// Two-stage: the booster is a separate group whose top sits at
+// `boosterOffset` below the sustainer's origin.
+const RADIAL_EXAGGERATION = 2.5;
+function noseRadius(shape, x, L, R) {          // x from the tip (0) to the base (L)
+  if (shape === "cone") return (R * x) / L;
+  if (shape === "parabolic") { const u = x / L; return R * (2 * u - u * u); }
+  const rho = (R * R + L * L) / (2 * R);       // tangent ogive
+  return Math.sqrt(Math.max(0, rho * rho - (L - x) * (L - x))) + R - rho;
+}
+
+function stageMesh(stage, k, yTop, colors) {
+  // Lathe profile from the tail up to yTop (model units), then fins.
+  // k: model units per metre along the axis; kr: radially (exaggerated).
+  const kr = k * RADIAL_EXAGGERATION;
+  const g = new THREE.Group();
+  const mat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.55, side: THREE.DoubleSide });
+  const pts = [];                                // [radius, y] from the top downward
+  let y = yTop;
+  if (stage.nose) {
+    const n = stage.nose, L = n.length_m * k, R = (n.diameter_m / 2) * kr;
+    const nosePts = [];
+    for (let i = 0; i <= 16; i++) { const x = (L * i) / 16; nosePts.push([noseRadius(n.shape, x, L, R), y - x]); }
+    const noseMesh = new THREE.Mesh(new THREE.LatheGeometry(nosePts.map(([r, yy]) => new THREE.Vector2(Math.max(r, 1e-4), yy)).reverse(), 24), mat(colors.nose));
+    g.add(noseMesh);
+    y -= L;
+  }
+  for (const b of stage.body) {
+    const L = b.length_m * k;
+    const rf = ((b.type === "tube" ? b.diameter_m : b.fore_diameter_m) / 2) * kr;
+    const ra = ((b.type === "tube" ? b.diameter_m : b.aft_diameter_m) / 2) * kr;
+    pts.push([rf, y], [ra, y - L]);
+    y -= L;
+  }
+  const yTail = y;
+  const body = new THREE.Mesh(new THREE.LatheGeometry(pts.map(([r, yy]) => new THREE.Vector2(r, yy)).reverse(), 24), mat(colors.body));
+  g.add(body);
+  for (const f of stage.fins || []) {
+    const cr = f.root_chord_m * k, ct = f.tip_chord_m * k, span = f.semispan_m * kr, sweep = f.sweep_m * k;
+    const yLe = yTail + f.root_le_from_tail_m * k;
+    const rBody = (stage.body[stage.body.length - 1].diameter_m || stage.body[stage.body.length - 1].aft_diameter_m) / 2 * kr;
+    const sh = new THREE.Shape();
+    sh.moveTo(0, yLe); sh.lineTo(span, yLe - sweep); sh.lineTo(span, yLe - sweep - ct); sh.lineTo(0, yLe - cr); sh.closePath();
+    const thick = Math.max(0.02, rBody * 0.12);
+    for (let i = 0; i < f.count; i++) {
+      const fin = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: thick, bevelEnabled: false }), mat(colors.fins));
+      fin.geometry.translate(rBody, 0, -thick / 2);
+      fin.rotation.y = (i * 2 * Math.PI) / f.count;
+      g.add(fin);
+    }
+  }
+  const rTail = pts.length ? pts[pts.length - 1][0] : 0.3;
+  const flame = new THREE.Mesh(
+    new THREE.ConeGeometry(rTail * 0.85, rTail * 5, 16).rotateX(Math.PI),
+    new THREE.MeshBasicMaterial({ color: "#fb923c", transparent: true, opacity: 0.9 }));
+  flame.position.y = yTail - rTail * 2.5;
+  flame.visible = false;
+  g.add(flame);
+  return { group: g, flame, yTail };
+}
+
+function buildRocketModel(rocket) {
+  const geo = rocket.geometry;
+  const stages = rocket.two_stage ? [geo.sustainer, geo.booster] : [geo];
+  const len = (st) => (st.nose ? st.nose.length_m : 0) + st.body.reduce((a, b) => a + b.length_m, 0);
+  const total = stages.reduce((a, st) => a + len(st), 0);
+  const k = 8 / total;                              // model units per metre
+  const top = 4;                                    // origin at the middle of the stack
+  const sust = stageMesh(stages[0], k, top, { nose: "#dc2626", body: "#f3f4f6", fins: "#1f2937" });
+  if (!rocket.two_stage) return { sustainer: sust, booster: null, boosterOffset: 0 };
+  const bTop = sust.yTail;
+  const boost = stageMesh(stages[1], k, 0, { nose: "#dc2626", body: "#cbd5e1", fins: "#475569" });
+  return { sustainer: sust, booster: boost, boosterOffset: bTop };   // booster top sits at bTop below origin
 }
 
 function buildChute() {
@@ -548,11 +628,49 @@ function createFlightView(data, th) {
     markers.push({ t: e.t, obj: m });
   }
 
-  const rocket = buildRocket();
+  const model = data.rocket?.geometry ? buildRocketModel(data.rocket) : null;
+  const rocket = model ? model.sustainer : buildRocket();
   group.add(rocket.group);
   const chute = buildChute();
   chute.visible = false;
   group.add(chute);
+  const tMain = events.main_deploy ? events.main_deploy.t : Infinity;
+
+  // Two-stage: the booster rides under the sustainer until separation, then
+  // follows its own track (and its own chute) to the ground.
+  const bt = data.booster || null;
+  const tSep = events.separation ? events.separation.t : Infinity;
+  let booster = null, boosterChute = null, bIdx = 0, tBoostDeploy = Infinity;
+  if (model && model.booster && bt) {
+    booster = model.booster;
+    group.add(booster.group);
+    boosterChute = buildChute();
+    boosterChute.visible = false;
+    group.add(boosterChute);
+    const bev = Object.fromEntries((bt.events || []).map((e) => [e.name, e]));
+    if (bev.deploy) tBoostDeploy = bev.deploy.t;
+    const bp = new Float32Array(3 * bt.t.length), vtmp = new THREE.Vector3();
+    for (let i = 0; i < bt.t.length; i++) toThree(bt.x[i], bt.y[i], bt.z[i], vtmp).toArray(bp, 3 * i);
+    group.add(fatLine(bp, { color: "#94a3b8", width: 1.5, opacity: 0.55, dashed: true }));
+    if (bev.landing) {
+      const lp = toThree(...bev.landing.position);
+      const lbl = makeLabel("Booster lands", { color: th.label, bg: th.labelBg, size: 0.022 });
+      lbl.position.copy(lp);
+      group.add(lbl);
+      const dot = makeDot("#94a3b8");
+      dot.position.copy(lp);
+      group.add(dot);
+    }
+  }
+  function boosterSample(t) {
+    let i = Math.min(bIdx, bt.t.length - 2);
+    if (bt.t[i] > t) i = 0;
+    while (i < bt.t.length - 2 && bt.t[i + 1] <= t) i++;
+    bIdx = i;
+    const f = Math.min(1, Math.max(0, (t - bt.t[i]) / (bt.t[i + 1] - bt.t[i])));
+    const L = (key) => bt[key][i] + f * (bt[key][i + 1] - bt[key][i]);
+    return { x: L("x"), y: L("y"), z: L("z"), vx: L("vx"), vy: L("vy"), vz: L("vz") };
+  }
 
   // Exhaust trail: points over the last TRAIL_SECONDS of powered flight, fading with age.
   const TRAIL_MAX = Math.ceil(TRAIL_SECONDS * (data.meta.sample_rate_hz || 60)) + 2;
@@ -611,14 +729,50 @@ function createFlightView(data, th) {
     rocket.group.position.y = Math.max(rocket.group.position.y, 0);
 
     const powered = isPowered(s.phase);
-    rocket.flame.visible = powered;
-    if (powered) rocket.flame.scale.set(1, 0.8 + 0.4 * Math.random(), 1);
+    // Before separation a two-stage burns on the booster: its flame, not the sustainer's.
+    const stacked = booster && t < tSep;
+    rocket.flame.visible = powered && !stacked;
+    if (rocket.flame.visible) rocket.flame.scale.set(1, 0.8 + 0.4 * Math.random(), 1);
+    if (booster) {
+      const bq = new THREE.Quaternion();
+      if (stacked) {
+        bq.copy(rocket.group.quaternion);
+        booster.group.position.copy(rocket.group.position).addScaledVector(velDir, model.boosterOffset * scale);
+        booster.flame.visible = powered;
+        if (powered) booster.flame.scale.set(1, 0.8 + 0.4 * Math.random(), 1);
+        boosterChute.visible = false;
+      } else {
+        const b = boosterSample(t);
+        const bp = toThree(b.x, b.y, b.z);
+        const bv = toThree(b.vx, b.vy, b.vz);
+        const dir = bv.lengthSq() > 0.25 ? bv.normalize() : new THREE.Vector3(0, 1, 0);
+        bq.setFromUnitVectors(UP, dir);
+        booster.group.position.copy(bp);
+        booster.group.position.y = Math.max(booster.group.position.y, 0);
+        booster.flame.visible = false;
+        if (t >= tBoostDeploy) {
+          const kb = Math.min(1, (t - tBoostDeploy) / CHUTE_INFLATE_S);
+          boosterChute.visible = true;
+          boosterChute.scale.setScalar(scale * 0.8 * (0.15 + 0.85 * kb * (2 - kb)));
+          boosterChute.position.copy(bp).add(new THREE.Vector3(0, 4 * scale + 6 * boosterChute.scale.y, 0));
+        } else boosterChute.visible = false;
+      }
+      booster.group.quaternion.copy(bq);
+      booster.group.scale.setScalar(scale);
+      // For scripts/check_viewer.py: distance between the TRACKED positions of
+      // the two bodies (m); 0 while stacked, growing after separation.
+      document.body.dataset.boosterGap = stacked ? "0" : rocketPos.distanceTo(toThree(...(() => {
+        const b = boosterSample(t); return [b.x, b.y, b.z];
+      })())).toFixed(1);
+    }
 
     // Parachute: inflates over CHUTE_INFLATE_S after deployment.
     if (t >= tDeploy) {
       const k = Math.min(1, (t - tDeploy) / CHUTE_INFLATE_S);
       chute.visible = true;
-      chute.scale.setScalar(scale * (0.15 + 0.85 * k * (2 - k)));
+      // Dual deploy: the main is larger than the drogue.
+      const mainK = t >= tMain ? 1.6 * Math.min(1, 0.4 + (t - tMain) / CHUTE_INFLATE_S) : 1.0;
+      chute.scale.setScalar(scale * mainK * (0.15 + 0.85 * k * (2 - k)));
       chute.position.copy(rocketPos).add(tmp.set(0, 4 * scale + 6 * chute.scale.y, 0));
     } else chute.visible = false;
 
@@ -685,7 +839,7 @@ function createFlightView(data, th) {
       (data.sil.health.length ? ` Health: ${data.sil.health.map((h) => h.text.split(";")[0]).join("; ")}.` : "");
   }
 
-  return { kind: "flight", group, T, update, center, radius, rocketPos, chart };
+  return { kind: "flight", group, T, update, center, radius, rocketPos, chart, staged: !!booster };
 }
 
 // -------------------------------------------------------- dispersion view --
@@ -788,6 +942,7 @@ function renderLegend(kind) {
       if (p !== "PAD" && p !== "LANDED") rows.push(`<div class="row"><span class="sw" style="background:${c}"></span>${p.toLowerCase()}</div>`);
     }
     for (const s of Object.values(MARKED_EVENTS)) rows.push(`<div class="row"><span class="dot" style="background:${s.color}"></span>${s.label.toLowerCase()}</div>`);
+    if (state.view && state.view.staged) rows.push(`<div class="row"><span class="sw" style="background:#94a3b8"></span>booster path</div>`);
   } else if (kind === "montecarlo") {
     const th = readTheme();
     rows.push(`<div class="row"><span class="dot" style="background:${th.landingDot}"></span>landing point</div>`,
@@ -825,7 +980,11 @@ function setCamMode(mode) {
   if (mode === "follow" && state.view.rocketPos) {
     const p = state.view.update(state.t);
     controls.target.copy(p);
-    camera.position.copy(p).add(new THREE.Vector3(45, 22, 55));
+    // ?dist=<m> sets the follow distance (default ~74 m, the original offset).
+    const dist = parseFloat(params.get("dist"));
+    const off = new THREE.Vector3(45, 22, 55);
+    if (Number.isFinite(dist) && dist > 0) off.setLength(dist);
+    camera.position.copy(p).add(off);
   } else {
     frameCamera(state.view);
   }
@@ -989,12 +1148,21 @@ async function start() {
   }
   state.entries = index.datasets;
   ui.dataset.innerHTML = "";
+  // Rocket picker: datasets grouped (Flights, Flight computer, Fleet, Monte Carlo).
+  const groups = new Map();
   for (const e of index.datasets) {
+    const key = e.group || "Datasets";
+    if (!groups.has(key)) {
+      const og = document.createElement("optgroup");
+      og.label = key;
+      groups.set(key, og);
+      ui.dataset.append(og);
+    }
     const o = document.createElement("option");
     o.value = e.id;
     o.textContent = e.label;
     o.title = e.description || "";
-    ui.dataset.append(o);
+    groups.get(key).append(o);
   }
   const wanted = index.datasets.find((e) => e.id === params.get("data")) || index.datasets[0];
   ui.dataset.value = wanted.id;

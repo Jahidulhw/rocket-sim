@@ -1,0 +1,113 @@
+{
+  "id": "kestrel-g80",
+  "order": 3,
+  "category": "hobby-large",
+  "label": "Kestrel (large hobby, G80T-11)",
+  "description": "Generic large sport rocket: 41.6 mm (BT-60 size) body, 29 mm motor mount, cardboard and plywood construction, AeroTech G80T-11, 30 in chute on the 11 s motor ejection charge.",
+  "notes": {
+    "mass": "400 g airframe: ~1 m of 41.6 mm tube, plywood fins, payload bay, 30 in nylon chute and 29 mm mount (a 320 g first draft was light for this size and over-flew comparable G-motor sport rockets, which typically reach ~760-1070 m)",
+    "cd": "0.60: larger, smoother airframe than the small kits",
+    "recovery": "single 30 in chute: ~0.5 kg descends at ~5 m/s",
+    "rail": "1.5 m rod/rail for a G motor (higher rail-exit speed needed)",
+    "delay": "11 s (within the G80T's listed 6-14 s): true apogee comes 11.1 s after burnout; a 7 s delay opened the chute ~4 s early at ~42 m/s"
+  },
+  "expected": {
+    "apogee_m": [
+      450,
+      1100
+    ],
+    "max_mach": [
+      0.4,
+      0.8
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 0.4,
+      "body_diameter_m": 0.0416,
+      "cd": 0.6,
+      "drag_model": "constant"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/AeroTech_G80T.eng",
+      "ejection_delay_s": 11.0
+    },
+    "launch": {
+      "rail_length_m": 1.5
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.762,
+      "chute_cd": 0.8
+    },
+    "sim": {
+      "dt_s": 0.005
+    }
+  },
+  "geometry": {
+    "nose": {
+      "shape": "ogive",
+      "length_m": 0.16,
+      "diameter_m": 0.0416,
+      "mass_kg": 0.035
+    },
+    "body": [
+      {
+        "type": "tube",
+        "length_m": 0.84,
+        "diameter_m": 0.0416,
+        "mass_kg": 0.12
+      }
+    ],
+    "fins": [
+      {
+        "count": 3,
+        "root_chord_m": 0.12,
+        "tip_chord_m": 0.06,
+        "semispan_m": 0.037,
+        "sweep_m": 0.06,
+        "root_le_from_tail_m": 0.12,
+        "mass_kg": 0.045
+      }
+    ],
+    "masses": [
+      {
+        "name": "29 mm motor mount + rings",
+        "mass_kg": 0.05,
+        "position_m": 0.91
+      },
+      {
+        "name": "30 in chute + harness",
+        "mass_kg": 0.08,
+        "position_m": 0.4
+      },
+      {
+        "name": "payload bay contents",
+        "mass_kg": 0.07,
+        "position_m": 0.28
+      }
+    ]
+  },
+  "sil": {
+    "fc": {
+      "backup_timer_s": 14.1,
+      "max_boost_s": 2.7,
+      "min_deploy_after_launch_s": 2.3,
+      "powered_jerk_psd": 10000.0
+    },
+    "flight_overrides": {
+      "motor.ejection_delay_s": 13.0
+    },
+    "notes": {
+      "backup_timer_s": "nominal true apogee + max(1.0 s, 4 sigma of the apogee time under the standard dispersions), from lift-off; the C6 value 8.5 s follows the same rule (7.42 + 1.08)",
+      "max_boost_s": "longest burn x 1.6 (C6: 1.86 s -> 3.0 s): burnout fallback for a stuck accelerometer",
+      "min_deploy_after_launch_s": "final burnout x 1.35 (C6: 1.86 s -> 2.5 s): deploy inhibit",
+      "basis": "G80T burn 1.70 s; true apogee 13.09 s (sigma 0.24 s); peak ~21 g",
+      "motor": "SIL flies a 13 s delay (listed range 6-14 s) so the charge fires at 14.7 s, after the FC's apogee event and its 14.1 s backup timer",
+      "powered_jerk_psd": "1e4 m^2/s^5 under thrust and for 0.5 s after each detected burnout (tail-off): the coast q (10) cannot follow thrust-curve and tail-off jerk on this rocket, the gate then rejected genuine samples and nominal flights went 'inconsistent' (found by the fleet SIL runs; see fc/include/fc/config.hpp). 1e4 sits in the measured plateau: apogee detection +0.04-0.05 s on every preset"
+    }
+  }
+}

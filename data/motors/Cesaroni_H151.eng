@@ -1,0 +1,23 @@
+; PROVENANCE: downloaded from the thrustcurve.org public API on 2026-10-03
+;   motorId 5f4294d200023100000002de, simfile 5f4294d20002e900000006a8
+;   (data source: "cert" = certification test data).
+;   Published summary (Cesaroni Technology 207H151-15A, 29 mm):
+;   total impulse 207.2 Ns, burn 1.38 s, avg thrust 150.8 N, max 214.8 N,
+;   propellant 109.1 g, loaded mass 238 g (thrustcurve.org listing).
+; The data below is reproduced unchanged.
+; Pro29-4G 207H151-RL 15A
+H151-RL 29 231 15-12-10-8-6 0.118 0.238 CTI
+   0.0080 125.295
+   0.021 209.602
+   0.052 160.928
+   0.118 186.779
+   0.293 190.738
+   0.465 183.518
+   0.683 171.641
+   0.988 145.557
+   1.133 134.145
+   1.221 74.292
+   1.293 29.81
+   1.372 10.014
+   1.398 6.521
+   1.4 0.0

@@ -1,0 +1,25 @@
+; PROVENANCE: downloaded from the thrustcurve.org public API on 2026-10-03
+;   motorId 5f4294d200023100000002a9, simfile 5f4294d20002e9000000063d
+;   (data source: "cert" = certification test data).
+;   Published summary (Cesaroni Technology 1364K454-19A, 54 mm):
+;   total impulse 1363.7 Ns, burn 3 s, avg thrust 454.1 N, max 620 N,
+;   propellant 769.2 g, loaded mass 1391 g (thrustcurve.org listing).
+; The data below is reproduced unchanged.
+K454-SK 54 404 10-11-12-13-14-15-16-17-18-19 0.821 1.391 CTI 
+0.021 10
+0.028 421
+0.032 586
+0.069 405
+0.2 475
+0.4 510
+0.6 530
+0.9 532
+1.2 525
+1.6 505
+2 470
+2.4 415
+2.55 410
+2.69 430
+2.93 70
+3 27
+3.15 0

@@ -8,7 +8,8 @@ C++ and skips syntax.
 It is updated as each milestone lands:
 * State machine and baseline detector: milestone 2.
 * Kalman filter: milestone 3.
-* Faults and requirements: milestone 4 (this version).
+* Faults and requirements: milestone 4.
+* The fleet (five rockets, two burns, dual deploy): Phase A (this version).
 
 **Scope.** The FC only detects flight events and commands parachute deployment.
 It has no guidance, steering, attitude control or targeting. Its single output
@@ -764,3 +765,166 @@ C6's 1.86 s burn, whatever the burnout detector concluded.
   (no deploy), but it corrupts the timer's time base for a real launch later. A
   pre-launch self-test (accelerometer reads 1 g ± 0.5 g, barometer steady,
   before arming) is the right fix on hardware.
+
+---
+
+## 9. The fleet: one flight computer, five rockets
+
+Phase A flies the same FC on five rockets:
+* a B6 mini rocket;
+* the original C6;
+* a G-motor sport rocket;
+* a supersonic K-motor high-power rocket;
+* a two-stage K + J sounding rocket.
+
+The FC code is the same everywhere; what differs is configuration. Each
+preset's `sil` section (`configs/rockets/*.json`) holds its FC parameters,
+its sensor model and its SIL motor delays, with a written justification for
+every value.
+
+### 9.1 Per-rocket configuration: rules, not tuning
+
+Every value comes from a rule anchored on the C6, so the C6's hand-tuned
+numbers are the special case of the rule:
+
+| Parameter | Rule | C6 check | Why |
+|---|---|---|---|
+| `backup_timer_s` | nominal true apogee + max(1.0 s, 4σ of the apogee time under the standard dispersions) | 7.42 + 1.08 = 8.5 | Must never pre-empt a working detector (REQ-009), yet fire before the fall gets fast |
+| `max_boost_s` | longest burn × 1.6 | 1.86 → 3.0 | Burnout fallback for a stuck accelerometer: must exceed any real burn |
+| `min_deploy_after_launch_s` | final burnout × 1.35 | 1.86 → 2.5 | Deploy inhibit, defence in depth for REQ-003 |
+| Filter R, accelerometer full scale, reference gate | **Derived** from the preset's sensor model; setting them by hand is rejected | (defaults) | R comes from the sensors, not from tuning (§7.3) |
+| Motor delay under SIL / backup device | Fires after the latest dispersed apogee and after the FC's own timer | C6-7 | The backup must stay a *backup* (§5.5) |
+
+**Sensor model per rocket.**
+* The K-motor rockets peak at 28–44 g. A hobby ±24 g accelerometer would clip
+  most of their burn, and the integrated velocity would be off by hundreds of
+  m/s. So Swift and Argo fly an ADXL375-class ±200 g model (σ 1.0 m/s²), and
+  their filter R follows automatically.
+* Sparrow peaks at about 34 g and keeps the ±24 g sensor. It clips briefly
+  during the B6's thrust spike. The filter absorbs that (powered-flight
+  process noise plus barometer correction), and that is realistic for a
+  40 g rocket.
+
+### 9.2 Two burns
+
+**What the FC knows.** It knows how many burns to expect (`burns = 2`),
+configured before flight, like the backup timer. It never commands staging:
+the sustainer lights after a pre-set passive delay (sim/staging.py), and
+there is deliberately no FC parameter or output that could trigger it.
+
+**What it does.**
+1. At the first burnout, with burns remaining, the FC enters COAST "awaiting
+   ignition". While it waits:
+   * no apogee decision and no backup timer;
+   * the deploy output is masked;
+   * **no innovation gating.** The sustainer's thrust step is real; gated, it
+     would look like 25 outliers in a row and the FC would declare itself
+     inconsistent at ignition.
+2. Ignition = accelerometer above 20 m/s² for 5 samples. While coasting the
+   reading is negative (drag), and any sustainer gives far more than 2 g, so
+   the margin is wide in both directions.
+3. **Dud sustainer.** If no ignition arrives within `stage_ignition_timeout_s`
+   (2.0 s = the 1.0 s pre-set delay + detection + margin), the FC treats the
+   current coast as the final one and detects apogee normally. A failed
+   sustainer still gets a chute (C++ `DudSustainerTimesOutAndStillDeploysAtApogee_REQ004`).
+4. **Thrust re-detection, always on.** Any burn detected in COAST (expected,
+   late or unexpected) returns the FC to BOOST, where deployment is locked
+   out. Even a rocket misconfigured as single-burn cannot deploy under its
+   sustainer's thrust (`UnexpectedSecondBurnReturnsToBoost_REQ003`). This is
+   defence in depth: *a burn is a burn*.
+
+**Rejected alternatives.**
+* *A time-only lockout* ("no deploy before T"). It doesn't know about a late
+  or dud sustainer, and it depends on dispersions.
+* *Detecting staging from the barometer.* The pressure signature of
+  separation is weak and noisy; the accelerometer's sign change is
+  unambiguous.
+* *FC-commanded staging.* Out of scope by design: staging stays passive.
+
+**Requirements.**
+* REQ-011: no deploy before the final burnout, under any fault.
+* REQ-012: staging is never reported as APOGEE, DESCENT or LANDED.
+* Verified on every Argo Monte Carlo run, and under spikes, a blackout, a
+  dead accelerometer and a stuck barometer placed across the gap.
+
+### 9.3 Dual deploy
+
+* **The drogue** opens at apogee, exactly as the single chute did.
+* **The main** is commanded in DESCENT, after the drogue, once the altitude
+  estimate has been below `main_deploy_altitude_m` (300 m) for 5 samples. The
+  reply's deploy field became a bitmask (1 = drogue, 2 = main), so
+  single-deploy replies are byte-identical to before.
+* **Failed barometer.** There's no altitude for the main event, so the FC
+  commands the main *with* the drogue. That costs drift (the descent is slow
+  from apogee) but gives a soft landing, which beats landing at 20 m/s on the
+  drogue. The fallback is common on real altimeters.
+* **The physics never auto-fires the main when an FC is attached.** The FC
+  owns the decision, so REQ-013 genuinely tests it. (Open loop, an ideal
+  altimeter fires it.)
+* **Limitation.** If the FC hangs, the independent backup device deploys only
+  the drogue (REQ-005 fleet note). A second altimeter on the main channel is
+  the real-world answer.
+
+### 9.4 What the fleet runs found, and how it was diagnosed
+
+These are the most important lessons of Phase A, because the first
+explanation for each was wrong.
+
+**Bug 1: nominal flights went "inconsistent".**
+* *Symptom.* The first SIL flight of every new preset failed. The C6 never
+  did. The FC declared its estimator inconsistent and deployed on the
+  backup timer.
+* *Three hypotheses, each tested and rejected:*
+  1. **"q must scale with the rocket's coast jerk".** Measured: Kestrel's
+     coast jerk (13.9 m/s³) is *lower* than the C6's (16.1), yet Kestrel
+     needed 10× the q. Rejected.
+  2. **"A settle window after burnout".** Gating off for 0.5 s made nominal
+     flights pass, but an existing fault test then failed: a spike landing
+     inside the ungated window was accepted and cascaded into inconsistency.
+     It traded one failure for another, and it didn't explain the cause.
+     Rejected.
+  3. **"Covariance inflation at burnout"** (the textbook maneuver-detection
+     fix). It changed nothing at all.
+* *Diagnosis.* A test-only `--trace` flag prints the filter internals per
+  frame. On Kestrel it showed that the FC declares burnout **0.15 s before
+  thrust actually ends**. On the G80T's long tail-off, the specific force
+  falls below the 5 m/s² threshold while the motor still burns, and the real
+  acceleration then keeps falling (about 60 m/s³) for half a second. The
+  coast q (10) cannot follow that, and the gate rejected the genuine samples.
+* *Fix: phase-dependent process noise.* `powered_jerk_psd` (10⁴) applies
+  under thrust and for a 0.5 s tail-off window after each detected burnout;
+  the tuned coast q applies otherwise. The FC knows its phase, so it tells
+  the filter what dynamics to expect. Gating stays on everywhere in coast,
+  and spikes are still rejected.
+* Regression tests: C++ `PoweredProcessNoiseTracksATailOffWithGatingOn_REQ001`,
+  and the end-to-end `test_burnout_tailoff_regression_on_a_real_motor`
+  (Kestrel goes inconsistent with the old setting and passes with the new).
+
+**Bug 2: a hot-motor Argo flight went inconsistent mid-coast.**
+* Found by the fleet Monte Carlo (1 run in 24).
+* The trace showed clean coast, 0.7 s after burnout, with the acceleration
+  changing at about 80 m/s³: the sustainer decelerating through the
+  **transonic drag rise** (A2's Cd(M)).
+* The subsonic coast q can't follow it. The supersonic rockets now use a
+  coast q of 1000. That scales the C6's 10 by the jerk ratio squared (about
+  36), with margin, and M3 showed the same accuracy up to 1000.
+* Regression test: `test_supersonic_coast_regression_hot_motor` replays the
+  exact run.
+
+**Lesson.** Instrument before fixing. Two of my plausible, textbook fixes
+were wrong, and one of them hid a new failure. The trace took minutes, and
+it pointed at the real mechanism.
+
+### 9.5 The C6 is unchanged, and how
+
+* Every new FC behaviour defaults to the original, so the regression-pinned
+  C6 is bit-identical:
+  * `burns = 1`;
+  * `main_deploy_altitude_m = 0`;
+  * `powered_jerk_psd = 0`, meaning "same as the coast q", i.e. the original
+    single-q filter, for *any* coast q.
+* The thrust re-detection rule needs more than 20 m/s² of specific force in
+  coast, which the C6 never sees.
+* **Trade-off left to you.** Enabling the powered q on the C6 would move one
+  faulted run's deploy (stuck barometer) 40 ms *closer* to apogee. It's an
+  improvement, but it changes pinned results, so it's off.

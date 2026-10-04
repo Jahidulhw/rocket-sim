@@ -1,0 +1,119 @@
+{
+  "id": "swift-k940",
+  "order": 4,
+  "category": "high-power",
+  "label": "Swift (high-power, supersonic, K940)",
+  "description": "Generic minimum-diameter 54 mm high-power rocket (fiberglass, ogive nose) on a Cesaroni 1633K940: goes supersonic. Dual deploy: 24 in drogue at apogee, 60 in main at 300 m.",
+  "notes": {
+    "mass": "1.25 kg: fiberglass minimum-diameter airframe, avionics bay, recovery gear",
+    "cd": "0.42 subsonic with the Mach-dependent model (transonic rise to ~0.8)",
+    "dual_deploy": "from ~4 km a single main (5 m/s) would drift for ~13 min in any wind; a drogue (~22 m/s) brings it down fast and the main opens low for a soft landing",
+    "backup": "motor flown plugged: its longest delay (18 s) fires at 19.8 s, ~4.5 s BEFORE the 24.4 s true apogee, and would beat the FC. An independent pre-set timer at 27.5 s after ignition backs up instead: true apogee under dispersions is 24.4 +- 0.49 s (latest of 40: 25.2 s), and it must also come after the FC's own 26.3 s backup timer so the FC always gets the first chance.",
+    "rail": "2.4 m (8 ft) rail"
+  },
+  "expected": {
+    "apogee_m": [
+      3000,
+      5000
+    ],
+    "max_mach": [
+      1.1,
+      2.0
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 1.25,
+      "body_diameter_m": 0.056,
+      "cd": 0.42,
+      "drag_model": "mach"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/Cesaroni_K940.eng",
+      "ejection_delay_s": null
+    },
+    "launch": {
+      "rail_length_m": 2.4
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.61,
+      "chute_cd": 0.8,
+      "main_diameter_m": 1.52,
+      "main_cd": 0.8,
+      "main_deploy_altitude_m": 300.0,
+      "backup_timer_s": 27.5
+    },
+    "sim": {
+      "dt_s": 0.005,
+      "max_time_s": 900.0
+    }
+  },
+  "geometry": {
+    "nose": {
+      "shape": "ogive",
+      "length_m": 0.3,
+      "diameter_m": 0.056,
+      "mass_kg": 0.18
+    },
+    "body": [
+      {
+        "type": "tube",
+        "length_m": 1.3,
+        "diameter_m": 0.056,
+        "mass_kg": 0.55
+      }
+    ],
+    "fins": [
+      {
+        "count": 3,
+        "root_chord_m": 0.15,
+        "tip_chord_m": 0.06,
+        "semispan_m": 0.053,
+        "sweep_m": 0.1,
+        "root_le_from_tail_m": 0.15,
+        "mass_kg": 0.12
+      }
+    ],
+    "masses": [
+      {
+        "name": "avionics bay (FC, battery)",
+        "mass_kg": 0.15,
+        "position_m": 0.62
+      },
+      {
+        "name": "drogue + main + harness",
+        "mass_kg": 0.25,
+        "position_m": 0.45
+      }
+    ]
+  },
+  "sil": {
+    "fc": {
+      "backup_timer_s": 26.3,
+      "max_boost_s": 2.9,
+      "min_deploy_after_launch_s": 2.4,
+      "main_deploy_altitude_m": 300.0,
+      "powered_jerk_psd": 10000.0,
+      "kf.jerk_psd": 1000.0
+    },
+    "sensors": {
+      "accel_noise_sigma_mps2": 1.0,
+      "accel_bias_mps2": 0.5,
+      "accel_range_mps2": 1962.0
+    },
+    "notes": {
+      "backup_timer_s": "nominal true apogee + max(1.0 s, 4 sigma of the apogee time under the standard dispersions), from lift-off; the C6 value 8.5 s follows the same rule (7.42 + 1.08)",
+      "max_boost_s": "longest burn x 1.6 (C6: 1.86 s -> 3.0 s): burnout fallback for a stuck accelerometer",
+      "min_deploy_after_launch_s": "final burnout x 1.35 (C6: 1.86 s -> 2.5 s): deploy inhibit",
+      "basis": "K940 burn 1.80 s; true apogee 24.36 s (sigma 0.49 s); peak ~44 g",
+      "sensors": "ADXL375-class +-200 g accelerometer (sigma 1.0 m/s^2, bias 0.5 m/s^2): the motor's peak specific force exceeds the hobby sensor's +-24 g, which would clip most of the burn and corrupt the filter's velocity by hundreds of m/s. The filter's R, full scale and reference gate are derived from this model.",
+      "main": "FC commands the main at 300 m (the physics' main altitude); the independent backup timer device (27.5 s) only backs up the drogue",
+      "powered_jerk_psd": "1e4 m^2/s^5 under thrust and for 0.5 s after each detected burnout (tail-off): the coast q (10) cannot follow thrust-curve and tail-off jerk on this rocket, the gate then rejected genuine samples and nominal flights went 'inconsistent' (found by the fleet SIL runs; see fc/include/fc/config.hpp). 1e4 sits in the measured plateau: apogee detection +0.04-0.05 s on every preset",
+      "kf.jerk_psd": "1000 m^2/s^5 in coast (vs 10 for the subsonic rockets): this rocket coasts supersonically and decelerates through the transonic drag rise, where the true acceleration changes at up to ~95 m/s^3 (measured), about 6x the subsonic C6's coast jerk. With q=10 the gate rejected those genuine changes on hot-motor dispersed flights (fleet campaign). Scaling q with jerk^2 gives ~350; 1000 adds margin and sits in the measured plateau (M3: same accuracy up to 1000)."
+    }
+  }
+}

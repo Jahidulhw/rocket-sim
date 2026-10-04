@@ -70,6 +70,7 @@ if(FC_BUILD_TESTS)
     tests/test_state_machine.cpp
     tests/test_kalman.cpp
     tests/test_faults.cpp
+    tests/test_multiburn.cpp
   )
   target_link_libraries(fc_tests PRIVATE fc_core GTest::gtest_main)
   fc_set_warnings(fc_tests)

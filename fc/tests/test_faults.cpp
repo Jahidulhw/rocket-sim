@@ -318,3 +318,43 @@ TEST(Faults, LandingNotDefeatedByNoiseExtremes_REQ010) {
   }
   EXPECT_EQ(late, 0);
 }
+
+// ------------------------------------------- phase-dependent process noise --
+
+TEST(Faults, PoweredProcessNoiseTracksATailOffWithGatingOn_REQ001) {
+  // Mechanism behind powered_jerk_psd / tailoff_s. A burnout declared during
+  // a long tail-off is followed by ~0.5 s of fast-falling acceleration. (The
+  // end-to-end regression on a real G80T tail-off is in
+  // tests/test_fleet_a5_fc.py.)
+  auto accel = [](double t) {                    // specific force
+    if (t <= 0.0) return kG;
+    if (t < 1.5) return 60.0 + kG;                                // boost
+    if (t < 2.0) return 60.0 + kG - (t - 1.5) / 0.5 * 100.0;      // long tail-off
+    return -40.0 + kG;                                            // coast
+  };
+  std::vector<double> zs(6001, 0.0);
+  double z = 0.0, v = 0.0;
+  for (std::size_t k = 1; k < zs.size(); ++k) {
+    const double a = accel(static_cast<double>(k) * 0.002) - kG;
+    v += a * 0.002;
+    z += v * 0.002;
+    zs[k] = z;
+  }
+  auto alt = [&](double t) {
+    if (t <= 0.0) return 0.0;
+    const auto k = static_cast<std::size_t>(std::lround(t / 0.002));
+    return zs[std::min(k, zs.size() - 1)];
+  };
+  for (const double q_powered : {10.0, 1.0e4}) {
+    FcConfig cfg;
+    cfg.powered_jerk_psd = q_powered;
+    StateMachine sm(cfg);
+    Trace tr;
+    drive(sm, tr, -300, 600, kDt, alt, accel, Sensors::nominal(), 11);
+    if (q_powered == 10.0) {
+      EXPECT_TRUE(sm.estimator_inconsistent()) << "coast q through a tail-off: gate locks the filter out";
+    } else {
+      EXPECT_FALSE(sm.estimator_inconsistent()) << "powered q must follow the tail-off";
+    }
+  }
+}

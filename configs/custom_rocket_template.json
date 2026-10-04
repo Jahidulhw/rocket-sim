@@ -1,0 +1,91 @@
+{
+  "id": "my-rocket",
+  "label": "My rocket",
+  "category": "hobby-large",
+  "order": 99,
+  "description": "Copy this file, edit the numbers, then run: python scripts/check_rocket.py my_rocket.json",
+  "notes": {
+    "how_to": "All units SI (m, kg, s). 'flight' is the point-mass flight config (see configs/default.json for every field); 'geometry' drives the Barrowman stability check and must agree with it: component masses sum to flight.rocket.dry_mass_kg (2 %), and the largest body diameter equals flight.rocket.body_diameter_m (1 %). Motors: any .eng file in data/motors/. Two-stage: add a 'booster' section and split geometry into 'sustainer'/'booster' (see configs/rockets/argo-2stage.json)."
+  },
+  "expected": {
+    "apogee_m": [
+      1,
+      100000
+    ],
+    "max_mach": [
+      0,
+      3
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 0.4,
+      "body_diameter_m": 0.0416,
+      "cd": 0.6,
+      "drag_model": "constant"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/AeroTech_G80T.eng",
+      "ejection_delay_s": 11.0
+    },
+    "launch": {
+      "rail_length_m": 1.5
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.762,
+      "chute_cd": 0.8
+    },
+    "sim": {
+      "dt_s": 0.005
+    }
+  },
+  "booster": null,
+  "geometry": {
+    "nose": {
+      "shape": "ogive",
+      "length_m": 0.16,
+      "diameter_m": 0.0416,
+      "mass_kg": 0.035
+    },
+    "body": [
+      {
+        "type": "tube",
+        "length_m": 0.84,
+        "diameter_m": 0.0416,
+        "mass_kg": 0.12
+      }
+    ],
+    "fins": [
+      {
+        "count": 3,
+        "root_chord_m": 0.12,
+        "tip_chord_m": 0.06,
+        "semispan_m": 0.037,
+        "sweep_m": 0.06,
+        "root_le_from_tail_m": 0.12,
+        "mass_kg": 0.045
+      }
+    ],
+    "masses": [
+      {
+        "name": "29 mm motor mount + rings",
+        "mass_kg": 0.05,
+        "position_m": 0.91
+      },
+      {
+        "name": "30 in chute + harness",
+        "mass_kg": 0.08,
+        "position_m": 0.4
+      },
+      {
+        "name": "payload bay contents",
+        "mass_kg": 0.07,
+        "position_m": 0.28
+      }
+    ]
+  }
+}
