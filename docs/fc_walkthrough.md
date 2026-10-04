@@ -297,28 +297,49 @@ reply stream records the exact frame where the decision was made.
 
 ### 5.7 DESCENT → LANDED
 
-**Condition:** AGL stays within **±3 m** of a reference sample for **5 s**.
-Leaving the band, or a frame gap, restarts the window with the current sample
+**Condition:** a **low-pass-filtered** AGL (an EMA with τ = 0.5 s, residual
+noise about 0.05 m) stays within **±3 m** of a reference for **5 s**. Leaving
+the band, or a frame gap, restarts the window with the current *filtered* value
 as the new reference.
 
 **Why these values.**
 * Under the chute the rocket sinks at about 3.8 m/s, so it leaves a 3 m band in
-  under 1 s. It can't fake 5 s of stability, even at 1.5 m/s (unit test).
-* Between two samples, barometer noise has σ√2 ≈ 0.71 m. 3 m is 4.2 σ, so on
-  the ground a restart caused by noise happens about once every 40,000
-  samples.
+  under 1 s. It can't fake 5 s of stability, even at 1.5 m/s (unit test). The
+  0.5 s filter lag doesn't change that.
+* On the ground, the filtered altitude moves by centimetres, so the window
+  completes 5 s after it starts.
+
+**Bug found by the Monte Carlo (and why the filter is there).** My first
+version ran the band test on *raw* samples.
+1. My analysis said a noise-induced restart happens about once per 40,000
+   samples, because 3 m is 4.2σ of the difference between two random samples.
+2. That analysis was wrong. A restart adopts **the sample that broke the band**
+   as its new reference, and that sample is, by construction, a noise extreme.
+3. On the ground, the reference then ping-ponged between about ±1.6 m
+   extremes, and each restart only needed the *opposite* extreme.
+4. Six of the 207 nominal Monte Carlo runs reported LANDED later than 10 s
+   after touchdown, or never (REQ-010).
+
+Filtering removes the selection bias: a restart can no longer pick a tail
+value. The C++ regression test `LandingNotDefeatedByNoiseExtremes_REQ010`
+fails on the old code (4 of 60 seeds late) and passes on the new code.
+
+*Lesson:* the failure came from an unexamined *selection* effect, not from the
+noise level itself. It took a large campaign, not a handful of runs, to show
+it.
 
 **Mistuning.**
 * *Band too tight or duration too long:* LANDED never comes.
 * *Band too loose or duration too short:* LANDED is declared while still
   descending slowly.
+* *Filter τ too long* (say 5 s): the filter lags a slow descent, and LANDED can
+  come early.
 * This transition isn't safety-critical, because the chute is already out. On
   hardware it would trigger the locator beacon, flush the flight log and enter
   low power.
 
-**Measured.** LANDED comes 4–8 s after touchdown. The window may start just
-above the ground and restart once. That's why the SIL sends 15 s of
-post-landing frames.
+**Measured.** All 207 nominal Monte Carlo runs report LANDED within 10 s of
+touchdown, typically about 5 s after.
 
 ### 5.8 The deploy command is latched
 

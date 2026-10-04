@@ -19,6 +19,17 @@
   --ghost: #33465c;
   --ellipse: #c2410c;
   --landing-dot: #1d4ed8;
+  /* SIL chart */
+  --chart-axis: #5b6776;
+  --chart-grid: rgba(20, 30, 45, 0.10);
+  --chart-true: #16202c;
+  --chart-est: #2563eb;
+  --chart-baro: rgba(91, 103, 118, 0.45);
+  --chart-fault: rgba(234, 88, 12, 0.16);
+  --chart-fault-edge: #c2410c;
+  --chart-drop: rgba(91, 103, 118, 0.22);
+  --chart-deploy: #db2777;
+  --chart-apogee: #a16207;
   color-scheme: light;
 }
 
@@ -43,6 +54,16 @@
     --ghost: #a9bfd8;
     --ellipse: #fb923c;
     --landing-dot: #93c5fd;
+    --chart-axis: #93a1b2;
+    --chart-grid: rgba(200, 215, 235, 0.10);
+    --chart-true: #e5ebf2;
+    --chart-est: #60a5fa;
+    --chart-baro: rgba(147, 161, 178, 0.45);
+    --chart-fault: rgba(251, 146, 60, 0.18);
+    --chart-fault-edge: #fb923c;
+    --chart-drop: rgba(147, 161, 178, 0.22);
+    --chart-deploy: #f472b6;
+    --chart-apogee: #facc15;
     color-scheme: dark;
   }
 }
@@ -127,6 +148,7 @@ select {
 .panel dl { margin: 0; display: grid; gap: 2px 14px; }
 .panel dl > div { display: flex; justify-content: space-between; gap: 12px; }
 .panel dt { color: var(--muted); }
+.panel dl > div[hidden] { display: none; }  /* author display:flex would override [hidden] */
 .panel dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 550; text-align: right; }
 
 #telemetry { top: 12px; left: 12px; min-width: 210px; }
@@ -141,6 +163,13 @@ select {
   color: #fff;
   background: #666;
 }
+
+#sil-panel { top: 12px; right: 12px; width: min(380px, calc(100% - 260px)); min-width: 260px; }
+#sil-panel .sil-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#sil-panel .sil-head h2 { margin: 0; }
+#sil-chart { display: block; width: 100%; height: 190px; margin-top: 6px; }
+#sil-panel .summary { max-width: none; }
+.seg.small button { padding: 2px 9px; font-size: 12px; }
 
 .legend { right: 12px; bottom: 12px; font-size: 12px; display: grid; gap: 3px; }
 .legend .row { display: flex; align-items: center; gap: 7px; }
@@ -216,6 +245,10 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   .seg button { padding: 5px 9px; }
   #telemetry, #mc-panel { top: 8px; left: 8px; padding: 7px 9px; min-width: 0; font-size: 12px; }
   #telemetry dl { grid-template-columns: 1fr 1fr; }
+  #sil-panel { top: auto; bottom: 8px; left: 8px; right: 8px; width: auto; min-width: 0; padding: 6px 8px; }
+  #sil-chart { height: 110px; }
+  #sil-panel .summary { display: none; }
+  #sil-panel:not([hidden]) ~ .scale-note { display: none; }  /* would sit on the chart */
   .summary { display: none; }
   .legend { display: none; }
   .scale-note { font-size: 10px; }

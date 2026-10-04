@@ -33,7 +33,7 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m pytest                       # 93 tests, ~30 s
+python -m pytest                       # 199 tests (93 physics + 106 SIL), ~2.5 min; SIL needs fc/ built (see below)
 python scripts/run_flight.py           # one flight: summary + out/flight/{flight.json,flight.png}
 python scripts/run_montecarlo.py       # 500 dispersed flights: stats + out/montecarlo/*
 python scripts/build_site.py           # regenerate all viewer data into web/data/
@@ -168,7 +168,7 @@ All of these live in [`configs/default.json`](configs/default.json), which lists
 
 ## How the tests validate the physics
 
-`python -m pytest`: 93 tests, all passing on Python 3.11 and 3.12. Each test
+`python -m pytest`: 93 physics tests (plus 106 SIL tests, see [Software-in-the-loop flight computer](#software-in-the-loop-flight-computer)), all passing. Each physics test
 compares the simulator with an independent answer: a closed-form solution, a
 conservation law, a published value, or a property any correct implementation must have.
 
@@ -263,16 +263,237 @@ step and no npm.
 * Responsive (desktop and phone), follows the OS light/dark setting, and shows a
   visible error if data fails to load.
 * URL parameters: `?data=windy`, `?t=12` (start paused at 12 s), `?cam=follow`.
+* **SIL datasets** ("SIL nominal", "SIL faults"):
+  * The telemetry panel adds the FC's state and its altitude and velocity
+    estimates.
+  * A "Flight computer" chart overlays the estimated and true altitude, with
+    the raw barometer, shaded fault intervals and dropped frames, the true
+    apogee, and the FC's deploy decision. An Ascent/Full toggle switches the
+    range.
+  * The 3D deploy marker names the mechanism that fired.
 
 The rocket and parachute are drawn enlarged; the page notes this. A real 30 cm
 rocket would be invisible at 300 m.
 
 ---
 
+## Software-in-the-loop flight computer
+
+A separate **C++17 flight computer** (FC), in [`fc/`](fc/), flies the simulated
+rocket in closed loop. The Python simulator generates noisy barometer and
+accelerometer readings at 100 Hz. The FC decides when to deploy the parachute,
+and the simulator applies that decision to the physics.
+
+> **Scope.** The FC **only detects flight events and commands parachute
+> deployment**. It has no steering, guidance, attitude control or targeting.
+> Its single output is one bit.
+
+Further reading:
+* [docs/fc_walkthrough.md](docs/fc_walkthrough.md): every threshold, design
+  decision and rejected alternative.
+* [docs/requirements.md](docs/requirements.md): the requirements.
+* [docs/verification_report.md](docs/verification_report.md): generated
+  evidence.
+* [docs/protocol.md](docs/protocol.md): the interface.
+
+### Architecture
+
+```mermaid
+flowchart LR
+  subgraph PY["Python simulator (sim/)"]
+    PHYS["3-DOF physics<br/>flight.py"] -->|"true z, a_z<br/>every 10 ms"| SENS["Sensor models<br/>sensors.py"]
+    SENS --> FAULT["Fault injection<br/>faults.py"]
+    FAULT -->|"S t baro accel"| LINK["SIL link + watchdog<br/>sil.py"]
+    LINK -->|"deploy command"| PHYS
+    MOTOR["Motor ejection charge<br/>C6-7, independent backup"] -->|"deploy at burnout + 7 s"| PHYS
+  end
+  subgraph CPP["C++ flight computer (fc/)"]
+    PARSE["Strict parser<br/>protocol.cpp"] --> SM["State machine<br/>PAD → BOOST → COAST →<br/>APOGEE → DESCENT → LANDED"]
+    KF["Kalman filter [h, v, a]<br/>gating + health"] --> SM
+    PARSE --> KF
+  end
+  LINK <-->|"stdin / stdout<br/>one line each way per tick (lockstep)"| PARSE
+```
+
+* **Lockstep.** Each tick the simulator sends one line and blocks for exactly
+  one reply. The FC's only clock is the frame timestamp, so runs are
+  deterministic: the same seed gives byte-identical output.
+* **Watchdog.** No reply within the timeout, or the process exits, means the
+  FC is declared failed. The motor charge still deploys.
+* **Three deployment layers.**
+  1. The FC's apogee detector.
+  2. The FC's backup timer, at launch + 8.5 s.
+  3. The motor's ejection charge, at burnout + 7 s.
+
+  Each one covers the failure of the one above it. Every run logs which one
+  deployed.
+
+### Protocol
+
+```
+Sim → FC:  S <t> <baro_alt_m> <accel_mps2>      FC → Sim:  R <t> <state> <est_alt> <est_vel> <deploy 0|1>
+           END                                              E <reason>      (input line rejected)
+```
+
+* Parsing is strict on both sides: exact field counts, whole-token numbers via
+  `std::from_chars`, no NaN or infinity.
+* A malformed or stale reply is treated as *no command*. Garbage can never
+  fire the chute.
+* The deploy bit is latched.
+* Health events (a stuck sensor, an inconsistent estimator) go to stderr.
+
+Full spec: [docs/protocol.md](docs/protocol.md).
+
+### Sensors and fault model
+
+| Sensor | Model (assumed hardware) | Noise | Bias | Other |
+|---|---|---|---|---|
+| Barometer | Altitude, MS5611-class | 0.5 m | +0.5 m | 0.1 m quantization |
+| Accelerometer | Vertical **specific force**, BMI088-class (+9.81 at rest, 0 in free fall) | 0.5 m/s² | +0.2 m/s² | ±24 g saturation |
+
+Faults ([`sim/faults.py`](sim/faults.py)), each with a start time and a
+duration:
+* frame **dropout** (a blackout, or random loss);
+* **stuck** sensor (value frozen);
+* **spikes** (outliers);
+* **bias drift**;
+* **FC hang** (the real process stops responding, via the test-only
+  `--inject-hang-at`).
+
+### Kalman filter
+
+State **x** = [h, v, a]ᵀ (altitude AGL, vertical velocity, vertical kinematic
+acceleration). The model is constant acceleration driven by white-noise jerk
+with spectral density q, and dt comes from the frame timestamps:
+
+$$
+F=\begin{bmatrix}1&\Delta t&\tfrac12\Delta t^2\\0&1&\Delta t\\0&0&1\end{bmatrix},\qquad
+Q=q\begin{bmatrix}\tfrac{\Delta t^5}{20}&\tfrac{\Delta t^4}{8}&\tfrac{\Delta t^3}{6}\\\tfrac{\Delta t^4}{8}&\tfrac{\Delta t^3}{3}&\tfrac{\Delta t^2}{2}\\\tfrac{\Delta t^3}{6}&\tfrac{\Delta t^2}{2}&\Delta t\end{bmatrix}
+$$
+
+There are two scalar measurements per frame, applied sequentially. R is
+diagonal, so no matrix is ever inverted:
+
+$$
+H_b=[1\;0\;0],\; R_b=\sigma_b^2+\tfrac{\Delta_q^2}{12}=0.2508\ \text{m}^2 \qquad
+H_a=[0\;0\;1],\; R_a=\sigma_a^2=0.25\ (\text{m/s}^2)^2
+$$
+
+$$
+y=z-H\hat x,\quad S=HPH^\top+R,\quad K=PH^\top S^{-1},\quad
+\hat x\leftarrow\hat x+Ky,\quad P\leftarrow(I-KH)P(I-KH)^\top+KRK^\top
+$$
+
+**R from the sensor model; biases are not in R.**
+* R comes straight from the sensor model: white noise plus quantization
+  variance.
+* Biases are removed instead by references learned on the pad, where the true
+  altitude and acceleration are known to be zero.
+
+**q is tuned in closed loop.** q = 10 m²/s⁵ was chosen by a SIL sweep. The
+plateau runs from 1 to 1000, and too small a q biases velocity and deploys
+*early*.
+
+**Apogee** = estimated v < 0 for 5 consecutive samples.
+
+**Innovation gating.** A measurement with y² > 5²·S is rejected, in COAST only,
+because ignition, burnout and chute snatch are real acceleration steps.
+
+**Degradation when a sensor fails.**
+* A sensor that repeats bit-identical readings is declared stuck. The FC then
+  degrades gracefully:
+  * stuck barometer: the filter runs on the accelerometer alone;
+  * stuck accelerometer: apogee falls back to the raw-barometer detector.
+* Persistent disagreement the FC can't isolate falls back to the backup timer.
+
+Details: [walkthrough §7–8](docs/fc_walkthrough.md).
+
+### Requirements and results
+
+Ten requirements ([docs/requirements.md](docs/requirements.md)), including:
+
+| ID | Requirement |
+|---|---|
+| REQ-001 | Deploy within 0.5 s of true apogee (nominal) |
+| REQ-002 | No false launch in 1000 × 60 s pad sits |
+| REQ-003 | Never deploy on the pad or under thrust, under any fault |
+| REQ-004 | Under any single fault, deploy within 1.5 s or via the backup timer |
+| REQ-005 | An FC hang is caught by the watchdog, and the chute still deploys |
+| REQ-006 | Deterministic |
+
+Each test is tagged with the requirements it verifies (pytest `@pytest.mark.req`,
+GoogleTest `_REQnnn`).
+
+`scripts/run_sil_montecarlo.py` flies 500 dispersed SIL flights. 60 % of them
+carry one random fault from 9 classes, and every flight is flown by **both**
+detectors on identical inputs. The campaign also runs 1000 pad sits.
+`scripts/verification_report.py` turns the results into
+[docs/verification_report.md](docs/verification_report.md): verdicts, a
+traceability matrix, and replayable worst cases.
+
+**Baseline vs Kalman**, from the current report:
+
+| Detector | Nominal: deploy − true apogee | Nominal within 0.5 s (REQ-001) | Single faults OK (REQ-004) |
+|---|---:|---:|---:|
+| Baseline (raw barometer, N samples below peak) | +0.520 s | 70/207 (34 %) | 227/257 (88 %) |
+| **Kalman (default)** | **+0.044 s** | **207/207 (100 %)** | **257/257 (100 %)** |
+
+The baseline is structurally late: it must wait until the altitude has
+*visibly* fallen. It is also defenceless against barometer spikes, deploying
+seconds early. The Kalman FC sees apogee as its velocity estimate crosses zero.
+Its remaining ~45 ms is the deliberate 5-sample confirmation window.
+
+**Bugs the campaign found** (both fixed, with regression tests):
+1. **Landing detector.** It could ping-pong between noise extremes and never
+   report LANDED.
+2. **Harness watchdog.** A 1 s wall-clock watchdog falsely tripped once under
+   host load.
+
+### Build and run
+
+**Windows** (Visual Studio Build Tools 2022 with the C++ workload, and CMake):
+
+```powershell
+cmake -S fc -B fc/build
+cmake --build fc/build --config Release
+ctest --test-dir fc/build -C Release --output-on-failure
+.venv\Scripts\python.exe -m pytest
+```
+
+**Linux** (g++ ≥ 11, CMake ≥ 3.16):
+
+```bash
+cmake -S fc -B fc/build -DCMAKE_BUILD_TYPE=Release
+cmake --build fc/build --parallel
+ctest --test-dir fc/build --output-on-failure
+python -m pytest
+```
+
+GoogleTest is fetched by CMake, pinned to v1.17.0 by SHA-256. The simulator
+finds the executable in `fc/build/` (or `$ROCKET_FC_EXE`). SIL tests **fail**,
+rather than skip, if it hasn't been built.
+
+**Running it:**
+
+```bash
+python scripts/run_sil.py                                  # one SIL flight: FC events vs truth, requirement verdicts
+python scripts/run_sil.py --fault stuck:3:inf:baro         # with a fault (kind:start[:dur[:sensor[:mag[:prob]]]])
+python scripts/run_sil.py --compare --seeds 50             # baseline vs Kalman on identical seeds
+python scripts/run_sil_montecarlo.py                       # 500 runs x 2 detectors + 1000 pad sits (~7 min, 8 workers)
+python scripts/verification_report.py                      # -> docs/verification_report.md
+```
+
+---
+
 ## CI and deploy
 
-* [`.github/workflows/tests.yml`](.github/workflows/tests.yml): runs pytest on Python 3.11 on every push and pull request.
-* [`.github/workflows/pages.yml`](.github/workflows/pages.yml): on push to `main`, installs dependencies, runs the tests (so unverified physics is never published), runs `build_site.py`, and deploys `web/` to GitHub Pages.
+* [`.github/workflows/tests.yml`](.github/workflows/tests.yml): on every push and pull request, builds `fc/` with CMake and g++ (warnings are errors), runs ctest, then runs pytest on Python 3.11. pytest includes the SIL tests, which use the built executable.
+* [`.github/workflows/pages.yml`](.github/workflows/pages.yml): on push to `main`, it:
+  1. installs dependencies;
+  2. builds the flight computer;
+  3. runs ctest and pytest, so unverified physics or flight software is never published;
+  4. runs `build_site.py`, which also generates the SIL datasets;
+  5. deploys `web/` to GitHub Pages.
 
 One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
@@ -295,11 +516,18 @@ rocket-sim/
     export.py        JSON for the viewer (60 Hz resampled flights, dispersion datasets)
   data/motors/Estes_C6.eng
   configs/default.json
-  tests/             93 pytest tests, organised by milestone (test_m1_core.py ... test_m5_montecarlo.py, test_config.py)
+  tests/             199 pytest tests: physics (test_m1_core.py ... test_m5_montecarlo.py, test_config.py) and SIL (test_sil_m1..m6_*.py)
+  fc/                C++17 flight computer (CMake): include/fc/{protocol,state_machine,kalman,config,runner}.hpp,
+                     src/ (+ main.cpp stdin/stdout loop), tests/ (GoogleTest, 69 tests)
+  sim/ (SIL)         sensors.py, faults.py, protocol.py, sil.py, requirements.py, sil_montecarlo.py
+  docs/              requirements.md, protocol.md, fc_walkthrough.md, verification_report.md (generated)
   scripts/
+    run_sil.py           one SIL flight (events, deploy timing, requirement verdicts); --fault, --compare
+    run_sil_montecarlo.py  500 SIL runs x 2 detectors + 1000 pad sits -> out/sil_mc/results.json
+    verification_report.py results + tagged test XML -> docs/verification_report.md
     run_flight.py        one flight -> summary, JSON, plots
     run_montecarlo.py    N flights -> stats, JSON, scatter + histogram
-    build_site.py        regenerate web/data/ (default, windy, angled, dispersion)
+    build_site.py        regenerate web/data/ (default, windy, angled, SIL nominal/faults, dispersion)
     check_viewer.py      headless-browser smoke test of the viewer
   web/               index.html, main.js, style.css, data/ (generated)
   docs/              screenshots used in this README

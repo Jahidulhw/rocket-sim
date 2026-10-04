@@ -30,6 +30,11 @@ const MARKED_EVENTS = {
   deploy: { label: "Deploy", color: "#ec4899" },
   landing: { label: "Landing", color: "#ef4444" },
 };
+// Flight-computer states (SIL datasets): the FC's beliefs, not the truth.
+const FC_COLORS = {
+  PAD: "#8a8f98", BOOST: "#f97316", COAST: "#3b82f6", APOGEE: "#eab308",
+  DESCENT: "#10b981", LANDED: "#6b7280",
+};
 const TRAIL_SECONDS = 0.6;
 const CHUTE_INFLATE_S = 0.4;
 
@@ -43,7 +48,11 @@ const ui = {
   telemetry: $("telemetry"), summary: $("summary"), mcPanel: $("mc-panel"),
   mcStats: $("mc-stats"), mcNote: $("mc-note"), playback: $("playback"),
   tm: { time: $("tm-time"), alt: $("tm-alt"), speed: $("tm-speed"), vz: $("tm-vz"),
-        range: $("tm-range"), phase: $("tm-phase") },
+        range: $("tm-range"), phase: $("tm-phase"),
+        fcState: $("tm-fc-state"), fcAlt: $("tm-fc-alt"), fcVel: $("tm-fc-vel") },
+  fcRows: document.querySelectorAll(".fc-row"),
+  silPanel: $("sil-panel"), silChart: $("sil-chart"), silNote: $("sil-note"),
+  silAscent: $("sil-ascent"), silFull: $("sil-full"),
 };
 
 function setStatus(s) { document.body.dataset.status = s; }
@@ -308,6 +317,165 @@ function buildChute() {
   return g;
 }
 
+// ------------------------------------------------------------- SIL chart --
+// 2D overlay of the flight computer's estimated altitude against the truth,
+// with the raw (delivered) barometer, fault intervals, dropped frames, the
+// true apogee and the FC's deploy decision. Static layers are drawn once into
+// an offscreen canvas; each frame only blits it and adds the playhead.
+function createSilChart(sil, T) {
+  const s = sil.series, n = s.t.length;
+  const canvas = ui.silChart, ctx = canvas.getContext("2d");
+  const cache = document.createElement("canvas");
+  let cacheKey = "", range = state.silRange || "ascent";
+  const tAp = sil.deploy.true_apogee_t;
+
+  // Frame-loss intervals from the per-sample "sent" flags.
+  const drops = [];
+  for (let i = 0; i < n; i++) {
+    if (!s.sent[i]) {
+      const a = s.t[i];
+      while (i < n && !s.sent[i]) i++;
+      drops.push([a, s.t[Math.min(i, n - 1)]]);
+    }
+  }
+
+  function index(t) {  // last sample with s.t <= t (binary search)
+    if (t <= s.t[0]) return 0;
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (s.t[mid] <= t) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+  function stateAt(t) {
+    let st = "PAD";
+    for (const tr of sil.transitions) { if (tr.t <= t + 1e-9) st = tr.state; else break; }
+    return st;
+  }
+  function sampleAt(t) {
+    const i = index(t);
+    return { state: stateAt(t), estAlt: s.est_alt[i], estVel: s.est_vel[i] };
+  }
+
+  const xMax = () => (range === "full" ? T : Math.min(T, Math.max(10, tAp + 5)));
+
+  function drawStatic(w, h, dpr) {
+    cache.width = w * dpr; cache.height = h * dpr;
+    const c = cache.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cs = getComputedStyle(document.documentElement), col = (v) => cs.getPropertyValue(v).trim();
+    const pad = { l: 36, r: 8, t: 14, b: 18 };
+    const x1 = xMax();
+    let yMax = 10;
+    for (let i = 0; i < n && s.t[i] <= x1; i++) yMax = Math.max(yMax, s.true_alt[i]);
+    yMax *= 1.12;
+    const X = (t) => pad.l + (t / x1) * (w - pad.l - pad.r);
+    const Y = (z) => h - pad.b - (Math.max(-0.05 * yMax, Math.min(z, yMax)) / yMax) * (h - pad.t - pad.b);
+
+    c.font = "10px system-ui, sans-serif";
+    c.textBaseline = "middle";
+    // grid + axes
+    c.strokeStyle = col("--chart-grid"); c.fillStyle = col("--chart-axis"); c.lineWidth = 1;
+    const ys = niceStep(yMax / 4), xs = niceStep(x1 / 6);
+    for (let z = 0; z <= yMax; z += ys) {
+      c.beginPath(); c.moveTo(pad.l, Y(z)); c.lineTo(w - pad.r, Y(z)); c.stroke();
+      c.textAlign = "right"; c.fillText(String(Math.round(z)), pad.l - 4, Y(z));
+    }
+    c.textAlign = "center";
+    for (let t = 0; t <= x1 + 1e-9; t += xs) c.fillText(String(Math.round(t)), X(t), h - pad.b + 9);
+    c.textAlign = "left"; c.fillText("m", 2, pad.t - 6);
+    c.textAlign = "right"; c.fillText("s", w - pad.r, h - pad.b + 9);
+
+    // fault intervals + dropped frames
+    for (const f of sil.faults) {
+      if (f.start >= x1) continue;
+      c.fillStyle = col("--chart-fault");
+      c.fillRect(X(f.start), pad.t, X(Math.min(f.end, x1)) - X(f.start), h - pad.t - pad.b);
+      c.fillStyle = col("--chart-fault-edge"); c.textAlign = "left";
+      c.fillText(f.label.replace("_", " "), X(f.start) + 3, pad.t + 5);
+    }
+    c.fillStyle = col("--chart-drop");
+    for (const [a, b] of drops) {
+      if (a < x1) c.fillRect(X(a), pad.t, Math.max(1, X(Math.min(b, x1)) - X(a)), h - pad.t - pad.b);
+    }
+
+    // raw barometer as delivered to the FC (faults included)
+    c.fillStyle = col("--chart-baro");
+    for (let i = 0; i < n && s.t[i] <= x1; i++) {
+      if (s.baro[i] != null && s.sent[i]) c.fillRect(X(s.t[i]) - 0.75, Y(s.baro[i]) - 0.75, 1.5, 1.5);
+    }
+    // truth and estimate
+    const line = (key, color, width, dash) => {
+      c.strokeStyle = color; c.lineWidth = width; c.setLineDash(dash); c.beginPath();
+      let pen = false;
+      for (let i = 0; i < n && s.t[i] <= x1; i++) {
+        const v = s[key][i];
+        if (v == null) { pen = false; continue; }
+        if (pen) c.lineTo(X(s.t[i]), Y(v)); else { c.moveTo(X(s.t[i]), Y(v)); pen = true; }
+      }
+      c.stroke(); c.setLineDash([]);
+    };
+    line("true_alt", col("--chart-true"), 1.5, []);
+    line("est_alt", col("--chart-est"), 1.5, [4, 3]);
+
+    // true apogee and the FC deploy decision
+    const vmark = (t, color, text, row) => {
+      if (t == null || t > x1) return;
+      c.strokeStyle = color; c.fillStyle = color; c.lineWidth = 1.2; c.setLineDash([2, 2]);
+      c.beginPath(); c.moveTo(X(t), pad.t); c.lineTo(X(t), h - pad.b); c.stroke(); c.setLineDash([]);
+      const right = X(t) > w * 0.6;
+      c.textAlign = right ? "right" : "left";
+      c.fillText(text, X(t) + (right ? -3 : 3), pad.t + 22 + 12 * row);  // below the fault-label row
+    };
+    vmark(tAp, col("--chart-apogee"), "true apogee", 0);
+    const d = sil.deploy;
+    if (d.fc_t != null) vmark(d.fc_t, col("--chart-deploy"), `FC deploy (${d.reason === "apogee" ? "apogee" : "timer"})`, 1);
+    for (const hv of sil.health) {  // health events: small triangles on the time axis
+      if (hv.t < 0 || hv.t > x1) continue;
+      c.fillStyle = col("--chart-fault-edge");
+      c.beginPath(); c.moveTo(X(hv.t), h - pad.b); c.lineTo(X(hv.t) - 4, h - pad.b - 7);
+      c.lineTo(X(hv.t) + 4, h - pad.b - 7); c.fill();
+    }
+    // legend
+    c.textAlign = "left";
+    let lx = pad.l + 4;
+    const ly = h - pad.b - 8 - (sil.health.length ? 8 : 0);
+    for (const [label, color, dash] of [["true", col("--chart-true"), []], ["FC estimate", col("--chart-est"), [4, 3]]]) {
+      c.strokeStyle = color; c.lineWidth = 1.5; c.setLineDash(dash);
+      c.beginPath(); c.moveTo(lx, ly); c.lineTo(lx + 14, ly); c.stroke(); c.setLineDash([]);
+      c.fillStyle = col("--chart-axis"); c.fillText(label, lx + 17, ly);
+      lx += 22 + c.measureText(label).width;
+    }
+    c.fillStyle = col("--chart-baro"); c.fillRect(lx, ly - 1, 3, 3);
+    c.fillStyle = col("--chart-axis"); c.fillText("baro", lx + 6, ly);
+    return { X, pad, x1 };
+  }
+
+  let geom = null;
+  function draw(t) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    const cs = getComputedStyle(document.documentElement);
+    const key = `${w}x${h}@${dpr}:${range}:${cs.getPropertyValue("--chart-true")}`;
+    if (key !== cacheKey) {
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      geom = drawStatic(w, h, dpr);
+      cacheKey = key;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(cache, 0, 0);
+    if (t <= geom.x1) {  // playhead
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.strokeStyle = cs.getPropertyValue("--accent").trim();
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(geom.X(t), geom.pad.t); ctx.lineTo(geom.X(t), h - geom.pad.b); ctx.stroke();
+    }
+  }
+
+  function setRange(r) { range = r; cacheKey = ""; }
+  return { draw, sampleAt, setRange };
+}
+
 // ------------------------------------------------------------ flight view --
 function validateFlight(d) {
   const tr = d && d.trajectory;
@@ -360,6 +528,11 @@ function createFlightView(data, th) {
     let text = `${style.label}  ${e.position[2].toFixed(0)} m`;
     if (name === "landing") text = `${style.label}  ${Math.hypot(e.position[0], e.position[1]).toFixed(0)} m from pad`;
     if (name === "deploy" && data.summary?.deployment?.timing) text = `${style.label} (${data.summary.deployment.timing} apogee)`;
+    if (name === "deploy" && data.sil) {
+      const d = data.sil.deploy;
+      text = d.mechanism === "fc" ? `Deploy: FC ${d.reason === "apogee" ? "apogee detect" : "backup timer"}`
+                                  : "Deploy: motor charge (backup)";
+    }
     // Apogee label above the point, deploy label to its left (they are often close).
     const anchor = name === "deploy" ? [1.08, 0.5] : [0.5, -0.25];
     const lbl = makeLabel(text, { color: th.label, bg: th.labelBg, size: 0.024, anchor });
@@ -398,6 +571,8 @@ function createFlightView(data, th) {
   const railDir = toThree(Math.sin(ti) * Math.sin(az), Math.sin(ti) * Math.cos(az), Math.cos(ti)).normalize();
   const tDeploy = events.deploy ? events.deploy.t : Infinity;
   const isPowered = (ph) => ph === "RAIL" || ph === "BOOST";
+
+  const chart = data.sil ? createSilChart(data.sil, T) : null;
 
   const UP = new THREE.Vector3(0, 1, 0);
   const rocketPos = new THREE.Vector3(), velDir = railDir.clone(), tmp = new THREE.Vector3();
@@ -477,6 +652,14 @@ function createFlightView(data, th) {
     ui.tm.range.textContent = Math.hypot(s.x, s.y).toFixed(1);
     ui.tm.phase.textContent = s.phase;
     ui.tm.phase.style.background = PHASE_COLORS[s.phase] || "#666";
+    if (chart) {
+      const fc = chart.sampleAt(t);
+      ui.tm.fcState.textContent = fc.state;
+      ui.tm.fcState.style.background = FC_COLORS[fc.state] || "#666";
+      ui.tm.fcAlt.textContent = fc.estAlt == null ? "-" : fc.estAlt.toFixed(1);
+      ui.tm.fcVel.textContent = fc.estVel == null ? "-" : (fc.estVel >= 0 ? "+" : "") + fc.estVel.toFixed(1);
+      chart.draw(t);
+    }
     return rocketPos;
   }
 
@@ -491,7 +674,18 @@ function createFlightView(data, th) {
   const center = new THREE.Vector3(lp.x / 2, apogee * 0.45, lp.z / 2);
   const radius = Math.max(apogee, Math.hypot(lp.x, lp.z), 50);
 
-  return { kind: "flight", group, T, update, center, radius, rocketPos };
+  if (data.sil) {
+    const d = data.sil.deploy;
+    const faults = data.sil.faults.map((f) => f.label.replace("_", " ")).join(", ") || "none";
+    ui.silNote.textContent = `FC (${data.sil.fc_mode}) ` +
+      (d.fc_t == null ? "never commanded deploy" :
+        `commanded deploy at ${d.fc_t.toFixed(2)} s, ${d.dt_s >= 0 ? "+" : ""}${d.dt_s.toFixed(2)} s vs true apogee ` +
+        `(${d.reason === "apogee" ? "apogee detector" : "backup timer"})`) +
+      `; chute by ${d.mechanism === "fc" ? "FC" : "motor charge"}. Faults: ${faults}.` +
+      (data.sil.health.length ? ` Health: ${data.sil.health.map((h) => h.text.split(";")[0]).join("; ")}.` : "");
+  }
+
+  return { kind: "flight", group, T, update, center, radius, rocketPos, chart };
 }
 
 // -------------------------------------------------------- dispersion view --
@@ -607,7 +801,8 @@ function renderLegend(kind) {
 }
 
 // --------------------------------------------------------- app state -------
-const state = { view: null, entry: null, t: 0, playing: true, speed: 1, cam: "orbit", scrubbing: false };
+const state = { view: null, entry: null, t: 0, playing: true, speed: 1, cam: "orbit", scrubbing: false,
+                silRange: "ascent" };
 const cache = new Map();
 
 function frameCamera(view) {
@@ -692,6 +887,9 @@ function buildView(data) {
   renderLegend(view.kind);
 
   const isFlight = view.kind === "flight";
+  const isSil = isFlight && !!view.chart;
+  ui.silPanel.hidden = !isSil;
+  for (const r of ui.fcRows) r.hidden = !isSil;
   ui.telemetry.hidden = !isFlight;
   ui.mcPanel.hidden = isFlight;
   for (const elx of [ui.play, ui.restart, ui.speed, ui.scrub, ui.camFollow]) elx.disabled = !isFlight;
@@ -709,6 +907,14 @@ function buildView(data) {
 }
 
 // ----------------------------------------------------------- controls ------
+function setSilRange(r) {
+  state.silRange = r;
+  ui.silAscent.setAttribute("aria-pressed", String(r === "ascent"));
+  ui.silFull.setAttribute("aria-pressed", String(r === "full"));
+  if (state.view && state.view.chart) { state.view.chart.setRange(r); state.view.update(state.t); }
+}
+ui.silAscent.addEventListener("click", () => setSilRange("ascent"));
+ui.silFull.addEventListener("click", () => setSilRange("full"));
 ui.play.addEventListener("click", () => {
   if (!state.view || state.view.kind !== "flight") return;
   if (!state.playing && state.t >= state.view.T) state.t = 0;
