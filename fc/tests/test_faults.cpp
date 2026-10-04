@@ -310,8 +310,11 @@ TEST(Faults, LandingNotDefeatedByNoiseExtremes_REQ010) {
     Trace tr;
     drive(sm, tr, -300, static_cast<int>((t_land + 30.0) / kDt), kDt, alt, acc, Sensors::nominal(), seed);
     const double t_landed = tr.first(FlightState::Landed);
-    if (std::isnan(t_landed) || t_landed - t_land > 10.0) ++late;
-    else EXPECT_GT(t_landed - t_land, 3.0) << seed;   // never "landed" while still well above ground
+    if (std::isnan(t_landed) || t_landed - t_land > 10.0) {
+      ++late;
+    } else {
+      EXPECT_GT(t_landed - t_land, 3.0) << seed;  // never "landed" while still well above ground
+    }
   }
   EXPECT_EQ(late, 0);
 }

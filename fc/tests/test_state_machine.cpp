@@ -79,7 +79,9 @@ TEST(StateMachine, LaunchNeedsNConsecutiveAccelSamples) {
   for (int i = 0; i < cfg.launch_accel_samples - 1; ++i) feed(60.0);
   EXPECT_EQ(feed(kG).state, FlightState::Pad);  // run broken one sample short
   const double t_first = t + kDt;
-  for (int i = 0; i < cfg.launch_accel_samples - 1; ++i) EXPECT_EQ(feed(60.0).state, FlightState::Pad);
+  for (int i = 0; i < cfg.launch_accel_samples - 1; ++i) {
+    EXPECT_EQ(feed(60.0).state, FlightState::Pad);
+  }
   EXPECT_EQ(feed(60.0).state, FlightState::Boost);
   ASSERT_TRUE(sm.launch_time().has_value());
   EXPECT_DOUBLE_EQ(*sm.launch_time(), t_first);  // launch time = start of the confirming run
@@ -334,8 +336,11 @@ TEST(StateMachine, DeployIsLatchedThroughLanding) {
   auto acc = [&](double t) { return t <= t_ap ? p.accel(t) : kG; };
   drive(sm, tr, -500, static_cast<int>((t_land + 20.0) / kDt), kDt, alt, acc, Sensors::nominal(), 4);
   const double t_dep = tr.first_deploy();
-  for (std::size_t i = 0; i < tr.t.size(); ++i)
-    if (tr.t[i] >= t_dep) ASSERT_TRUE(tr.out[i].deploy) << tr.t[i];
+  for (std::size_t i = 0; i < tr.t.size(); ++i) {
+    if (tr.t[i] >= t_dep) {
+      ASSERT_TRUE(tr.out[i].deploy) << tr.t[i];
+    }
+  }
   const double t_landed = tr.first(FlightState::Landed);
   EXPECT_GT(t_landed, t_land + 5.0 - 0.8);  // ref sample may be set just before touchdown
   EXPECT_LT(t_landed, t_land + 6.5);
@@ -366,8 +371,9 @@ TEST(StateMachine, StatesNeverGoBackwards) {
     auto alt = [&](double t) { return t <= t_ap ? p.alt(t) : std::max(0.0, z_ap - 3.8 * (t - t_ap)); };
     auto acc = [&](double t) { return t <= t_ap ? p.accel(t) : kG; };
     drive(sm, tr, -500, 9000, kDt, alt, acc, Sensors::nominal(), seed);
-    for (std::size_t i = 1; i < tr.out.size(); ++i)
+    for (std::size_t i = 1; i < tr.out.size(); ++i) {
       ASSERT_GE(static_cast<int>(tr.out[i].state), static_cast<int>(tr.out[i - 1].state));
+    }
     EXPECT_EQ(tr.out.back().state, FlightState::Landed);
   }
 }

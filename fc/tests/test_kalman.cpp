@@ -92,8 +92,11 @@ TEST(Kalman, ProcessNoiseIsExactWhiteJerkIntegral) {
       two[i][j] = s + Q[i][j];
     }
   const Mat3 Q2 = Kalman3::process_noise(2 * dt, q);
-  for (std::size_t i = 0; i < 3; ++i)
-    for (std::size_t j = 0; j < 3; ++j) EXPECT_NEAR(two[i][j], Q2[i][j], 1e-15 + 1e-12 * std::fabs(Q2[i][j]));
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_NEAR(two[i][j], Q2[i][j], 1e-15 + 1e-12 * std::fabs(Q2[i][j]));
+    }
+  }
 }
 
 TEST(Kalman, ConvergesOnConstantVelocity) {
@@ -181,7 +184,9 @@ TEST(Kalman, CovarianceStaysPositiveSemidefinite) {
     if (k % 3 != 0) kf.update_baro(h + 0.5 * n.gauss());
     kf.update_accel(-kG + 0.5 * n.gauss());
     ASSERT_TRUE(IsSymmetricPsd(kf.P())) << "after update, step " << k;
-    for (std::size_t i = 0; i < 3; ++i) ASSERT_GT(kf.P()[i][i], 0.0);
+    for (std::size_t i = 0; i < 3; ++i) {
+      ASSERT_GT(kf.P()[i][i], 0.0);
+    }
     if (k % 500 == 0) { h = 0.0; v = 0.0; kf.init(0.0); }
   }
 }
