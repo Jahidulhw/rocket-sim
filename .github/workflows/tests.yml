@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -18,8 +18,21 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Run test suite
+      # C++ flight computer: g++ with -Wall -Wextra -Wpedantic -Wshadow
+      # -Wconversion, warnings are errors in CI.
+      - name: Configure flight computer (CMake, g++)
+        run: cmake -S fc -B fc/build -DCMAKE_BUILD_TYPE=Release -DFC_WARNINGS_AS_ERRORS=ON
+
+      - name: Build flight computer
+        run: cmake --build fc/build --parallel
+
+      - name: C++ unit tests (ctest / GoogleTest)
+        run: ctest --test-dir fc/build --output-on-failure
+
+      # The SIL tests find fc/build/flight_computer automatically; they fail
+      # (never skip) if it is missing.
+      - name: Python tests (physics + SIL)
         run: python -m pytest -v

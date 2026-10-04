@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -113,3 +114,68 @@ def montecarlo_to_dict(mc_result, label: str = "", description: str = "") -> dic
         "sample_paths": [{"run": p["run"], "t": _r(p["t"], 3),
                           **{c: _r(p[c], 2) for c in "xyz"}} for p in mc_result.sample_paths],
     }
+
+
+# ------------------------------------------------------------------ SIL --
+
+SIL_RATE_HZ = 50   # FC log is 100 Hz; every 2nd tick is plenty for the chart
+
+
+def _num_or_none(v, nd):
+    v = float(v)
+    return round(v, nd) if math.isfinite(v) else None
+
+
+def sil_flight_to_dict(sil_result, fc_mode: str, label: str = "", description: str = "") -> dict:
+    """Flight dataset plus a "sil" section: FC state per sample, estimated vs
+    true altitude, delivered barometer, fault intervals, FC deploy decision
+    (time, reason, mechanism) and FC health events. The viewer's timeline
+    starts at ignition, so pre-launch pad frames are omitted. Ticks without
+    an FC reply (dropped frame, dead FC) have fc_state -1 and null estimates."""
+    from .protocol import FC_STATES
+    from .requirements import true_apogee_t
+
+    res = sil_result
+    d = flight_to_dict(res.flight, label=label, description=description)
+    T = res.flight.flight_time_s
+    log = res.log
+    keep = np.flatnonzero((log["t"] >= -1e-9) & (log["t"] <= T + 1e-9))
+    keep = keep[:: max(1, round(100 / SIL_RATE_HZ))]
+    state_idx = [FC_STATES.index(s) if s else -1 for s in log["fc_state"][keep]]
+    series = {"t": _r(log["t"][keep], 3),
+              "true_alt": _r(log["z_true"][keep], 2),
+              "est_alt": [_num_or_none(v, 2) for v in log["est_alt"][keep]],
+              "est_vel": [_num_or_none(v, 2) for v in log["est_vel"][keep]],
+              "true_vz": _r(log["vz_true"][keep], 2),
+              "baro": [_num_or_none(v, 2) for v in log["baro"][keep]],
+              "fc_state": state_idx,
+              "sent": [int(bool(v)) for v in log["sent"][keep]]}
+    transitions, prev = [], None
+    for t, s in zip(log["t"], log["fc_state"]):
+        if s and s != prev and t >= -1e-9:
+            transitions.append({"t": round(float(t), 3), "state": str(s)})
+        if s:
+            prev = s
+    faults = []
+    for f in res.faults:
+        start = max(0.0, f.start_s)
+        end = T if (f.kind == "hang" or math.isinf(f.duration_s)) else min(T, f.start_s + f.duration_s)
+        if end > start:
+            faults.append({"label": f.label, "kind": f.kind, "start": round(start, 3), "end": round(end, 3),
+                           "spec": f.to_dict()})
+    health = []
+    for line in res.fc_health_events:
+        m = re.search(r"t=(-?[\d.]+) HEALTH (.*)", line)
+        if m:
+            health.append({"t": float(m.group(1)), "text": m.group(2)})
+    ta = true_apogee_t(res)
+    d["sil"] = {
+        "fc_mode": fc_mode, "fc_states": list(FC_STATES), "series": series, "transitions": transitions,
+        "faults": faults, "health": health,
+        "deploy": {"fc_t": res.fc_deploy_t, "reason": res.fc_deploy_reason, "mechanism": res.deploy_mechanism,
+                   "true_apogee_t": round(ta, 4),
+                   "dt_s": None if res.fc_deploy_t is None else round(res.fc_deploy_t - ta, 4)},
+        "fc_failed": {"failed": res.fc_failed, "t": res.failure_t, "reason": res.failure_reason},
+        "protocol_errors": res.protocol_errors,
+    }
+    return _clean(d)

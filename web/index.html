@@ -62,6 +62,9 @@
         <div><dt>Vertical</dt><dd><span id="tm-vz">-</span> m/s</dd></div>
         <div><dt>Downrange</dt><dd><span id="tm-range">-</span> m</dd></div>
         <div><dt>Phase</dt><dd><span id="tm-phase" class="phase-badge">-</span></dd></div>
+        <div class="fc-row" hidden><dt>FC state</dt><dd><span id="tm-fc-state" class="phase-badge">-</span></dd></div>
+        <div class="fc-row" hidden><dt>FC est. alt</dt><dd><span id="tm-fc-alt">-</span> m</dd></div>
+        <div class="fc-row" hidden><dt>FC est. vel</dt><dd><span id="tm-fc-vel">-</span> m/s</dd></div>
       </dl>
       <p id="summary" class="summary"></p>
     </section>
@@ -70,6 +73,18 @@
       <h2>Dispersion</h2>
       <dl id="mc-stats"></dl>
       <p class="summary" id="mc-note"></p>
+    </section>
+
+    <section id="sil-panel" class="panel" hidden aria-label="Flight computer: estimated vs true altitude">
+      <div class="sil-head">
+        <h2>Flight computer</h2>
+        <div class="seg small" role="group" aria-label="Chart range">
+          <button type="button" id="sil-ascent" aria-pressed="true">Ascent</button>
+          <button type="button" id="sil-full" aria-pressed="false">Full</button>
+        </div>
+      </div>
+      <canvas id="sil-chart" role="img" aria-label="Estimated vs true altitude with fault intervals"></canvas>
+      <p class="summary" id="sil-note"></p>
     </section>
 
     <aside id="legend" class="panel legend" aria-label="Legend"></aside>
