@@ -118,6 +118,13 @@ struct FcConfig {
   // probability ~3e-5 per sample.
   double landing_band_m = 3.0;
   double landing_duration_s = 5.0;
+  // The band test runs on a low-pass filtered altitude (EMA, tau 0.5 s;
+  // residual noise ~0.05 m). On RAW samples, a window restart adopts the
+  // out-of-band sample (a noise extreme) as its reference, and on the ground
+  // the reference ping-pongs between +-3 sigma extremes, delaying LANDED
+  // indefinitely: found by the SIL Monte Carlo (REQ-010). 0.5 s of lag still
+  // lets a 1 m/s descent leave the band within a few seconds.
+  double landing_filter_tau_s = 0.5;
 };
 
 // Override one numeric parameter by name (e.g. "kf.jerk_psd"). Returns false

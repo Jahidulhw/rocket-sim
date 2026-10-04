@@ -125,6 +125,8 @@ class StateMachine {
   std::optional<double> launch_t_;
   double max_agl_ = 0.0;
 
+  bool land_filt_init_ = false;
+  double land_filt_m_ = 0.0;  // low-pass AGL for landing detection
   bool land_ref_init_ = false;
   double land_ref_m_ = 0.0;
   double land_start_t_ = 0.0;

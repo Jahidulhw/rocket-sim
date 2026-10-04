@@ -1,26 +1,28 @@
 #include "fc/kalman.hpp"
 
+#include <cstddef>
+
 namespace fc {
 namespace {
 
 Mat3 mul(const Mat3& A, const Mat3& B) {
   Mat3 C{};
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j)
-      for (int k = 0; k < 3; ++k) C[i][j] += A[i][k] * B[k][j];
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j)
+      for (std::size_t k = 0; k < 3; ++k) C[i][j] += A[i][k] * B[k][j];
   return C;
 }
 
 Mat3 transpose(const Mat3& A) {
   Mat3 T{};
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j) T[i][j] = A[j][i];
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j) T[i][j] = A[j][i];
   return T;
 }
 
 void symmetrise(Mat3& P) {
-  for (int i = 0; i < 3; ++i)
-    for (int j = i + 1; j < 3; ++j) P[i][j] = P[j][i] = 0.5 * (P[i][j] + P[j][i]);
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = i + 1; j < 3; ++j) P[i][j] = P[j][i] = 0.5 * (P[i][j] + P[j][i]);
 }
 
 }  // namespace
@@ -61,8 +63,8 @@ void Kalman3::predict(double dt) {
   x_[2] = x[2];
   P_ = mul(mul(F, P_), transpose(F));
   const Mat3 Q = process_noise(dt, cfg_.jerk_psd);
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j) P_[i][j] += Q[i][j];
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j) P_[i][j] += Q[i][j];
   symmetrise(P_);
 }
 
@@ -76,7 +78,7 @@ UpdateResult Kalman3::update_accel(double a_meas, double gate_sigma) {
 // Scalar update for H = e_idx (a unit row vector). With diagonal R, two
 // sequential scalar updates equal one joint update, and S is a scalar, so
 // there is no matrix inverse anywhere in the filter.
-UpdateResult Kalman3::update_scalar(int idx, double z, double r, double gate_sigma) {
+UpdateResult Kalman3::update_scalar(std::size_t idx, double z, double r, double gate_sigma) {
   UpdateResult u;
   u.innovation = z - x_[idx];
   u.s = P_[idx][idx] + r;
@@ -88,20 +90,20 @@ UpdateResult Kalman3::update_scalar(int idx, double z, double r, double gate_sig
     return u;
   }
   Vec3 K{};
-  for (int i = 0; i < 3; ++i) K[i] = P_[i][idx] / u.s;
-  for (int i = 0; i < 3; ++i) x_[i] += K[i] * u.innovation;
+  for (std::size_t i = 0; i < 3; ++i) K[i] = P_[i][idx] / u.s;
+  for (std::size_t i = 0; i < 3; ++i) x_[i] += K[i] * u.innovation;
 
   // Joseph form: P = (I - K H) P (I - K H)' + K R K'. Algebraically equal
   // to (I - K H) P, but it stays symmetric PSD under rounding error, where
   // the short form can lose definiteness and make the filter diverge.
   Mat3 A{};
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) A[i][j] = (i == j ? 1.0 : 0.0);
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) A[i][j] = (i == j ? 1.0 : 0.0);
     A[i][idx] -= K[i];
   }
   Mat3 P = mul(mul(A, P_), transpose(A));
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j) P[i][j] += K[i] * r * K[j];
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j) P[i][j] += K[i] * r * K[j];
   P_ = P;
   symmetrise(P_);
   return u;

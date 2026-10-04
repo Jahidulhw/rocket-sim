@@ -147,12 +147,15 @@ def main(argv=None) -> int:
     ap.add_argument("--seeds", type=int, default=0, help="run this many seeds (seed, seed+1, ...) and report statistics")
     ap.add_argument("--fc-exe", default=None)
     ap.add_argument("--fault", action="append", default=[], metavar="SPEC", help="inject a fault (repeatable)")
+    ap.add_argument("--pre-launch", type=float, default=10.0, help="pad sit before ignition, s")
+    ap.add_argument("--post-landing", type=float, default=15.0, help="frames after touchdown, s")
     args = ap.parse_args(argv)
     cfg = build_config(args)
 
     if args.seeds <= 0:
         faults = tuple(Fault.parse(f) for f in args.fault)
-        res = run_sil(cfg, SilConfig(seed=args.seed, fc_exe=args.fc_exe, fc_mode=args.mode, faults=faults))
+        res = run_sil(cfg, SilConfig(seed=args.seed, fc_exe=args.fc_exe, fc_mode=args.mode, faults=faults,
+                                     pre_launch_s=args.pre_launch, post_landing_s=args.post_landing))
         print_single(res, args.mode)
         print(f"Log              : {write_log_csv(res, OUT_DIR / 'sil_log.csv').relative_to(REPO_ROOT)}")
         return 0

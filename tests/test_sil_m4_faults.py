@@ -31,6 +31,11 @@ def test_fault_spec_parsing():
             Fault.parse(bad)
 
 
+def test_fault_round_trips_through_spec():
+    for f in [Fault("stuck", 3.0, sensor="accel"), Fault("spike", 1.25, 5.0, "baro", 40.0, 0.2), Fault("hang", 4.0)]:
+        assert Fault.parse(f.to_spec()) == f
+
+
 def test_fault_round_trips_through_dict():
     for f in [Fault("stuck", 3.0, sensor="accel"), Fault("spike", 1.0, 5.0, "baro", 40.0, 0.2)]:
         assert Fault.from_dict(f.to_dict()) == f

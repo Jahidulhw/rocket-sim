@@ -62,6 +62,11 @@ class Fault:
         d["duration_s"] = None if math.isinf(self.duration_s) else self.duration_s
         return d
 
+    def to_spec(self) -> str:
+        """Inverse of parse(): the CLI form, e.g. for replay commands."""
+        dur = "inf" if math.isinf(self.duration_s) else f"{self.duration_s:.6g}"
+        return f"{self.kind}:{self.start_s:.6g}:{dur}:{self.sensor}:{self.magnitude:.6g}:{self.probability:.6g}"
+
     @classmethod
     def from_dict(cls, d: dict) -> "Fault":
         d = dict(d)

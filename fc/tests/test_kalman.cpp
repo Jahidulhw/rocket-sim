@@ -20,14 +20,14 @@ double quantize(double v, double q) { return q * std::round(v / q); }
 // principal minors after a tiny diagonal shift (Sylvester's criterion is
 // for strict definiteness; the shift turns "semi" into "strict").
 ::testing::AssertionResult IsSymmetricPsd(const Mat3& P) {
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j)
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j)
       if (P[i][j] != P[j][i]) return ::testing::AssertionFailure() << "asymmetric at " << i << j;
   double scale = 0.0;
-  for (int i = 0; i < 3; ++i) scale = std::max(scale, std::fabs(P[i][i]));
+  for (std::size_t i = 0; i < 3; ++i) scale = std::max(scale, std::fabs(P[i][i]));
   const double eps = 1e-12 * std::max(scale, 1e-30);
   Mat3 A = P;
-  for (int i = 0; i < 3; ++i) A[i][i] += eps;
+  for (std::size_t i = 0; i < 3; ++i) A[i][i] += eps;
   const double m1 = A[0][0];
   const double m2 = A[0][0] * A[1][1] - A[0][1] * A[1][0];
   const double m3 = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) -
@@ -84,16 +84,16 @@ TEST(Kalman, ProcessNoiseIsExactWhiteJerkIntegral) {
   // makes skipped frames and irregular dt safe.
   const Mat3 F = Kalman3::transition(dt);
   Mat3 two{};
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j) {
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j) {
       double s = 0.0;
-      for (int k = 0; k < 3; ++k)
-        for (int l = 0; l < 3; ++l) s += F[i][k] * Q[k][l] * F[j][l];
+      for (std::size_t k = 0; k < 3; ++k)
+        for (std::size_t l = 0; l < 3; ++l) s += F[i][k] * Q[k][l] * F[j][l];
       two[i][j] = s + Q[i][j];
     }
   const Mat3 Q2 = Kalman3::process_noise(2 * dt, q);
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j) EXPECT_NEAR(two[i][j], Q2[i][j], 1e-15 + 1e-12 * std::fabs(Q2[i][j]));
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j) EXPECT_NEAR(two[i][j], Q2[i][j], 1e-15 + 1e-12 * std::fabs(Q2[i][j]));
 }
 
 TEST(Kalman, ConvergesOnConstantVelocity) {
@@ -181,7 +181,7 @@ TEST(Kalman, CovarianceStaysPositiveSemidefinite) {
     if (k % 3 != 0) kf.update_baro(h + 0.5 * n.gauss());
     kf.update_accel(-kG + 0.5 * n.gauss());
     ASSERT_TRUE(IsSymmetricPsd(kf.P())) << "after update, step " << k;
-    for (int i = 0; i < 3; ++i) ASSERT_GT(kf.P()[i][i], 0.0);
+    for (std::size_t i = 0; i < 3; ++i) ASSERT_GT(kf.P()[i][i], 0.0);
     if (k % 500 == 0) { h = 0.0; v = 0.0; kf.init(0.0); }
   }
 }

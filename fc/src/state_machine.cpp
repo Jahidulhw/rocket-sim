@@ -80,6 +80,12 @@ FcOutput StateMachine::update(const SensorFrame& f) {
   }
   const double agl = f.baro_alt_m - ground_m_;
   if (launch_t_ && !baro_failed_) max_agl_ = std::max(max_agl_, agl);
+  if (!land_filt_init_) {
+    land_filt_init_ = true;
+    land_filt_m_ = agl;
+  } else {
+    land_filt_m_ += (1.0 - std::exp(-dt / cfg_.landing_filter_tau_s)) * (agl - land_filt_m_);
+  }
 
   const bool use_kf = cfg_.apogee_mode == ApogeeMode::Kalman;
   if (use_kf) run_filter(dt, f, agl);
@@ -205,15 +211,16 @@ void StateMachine::on_coast(const SensorFrame& f, double agl) {
   }
 }
 
-void StateMachine::on_descent(const SensorFrame& f, double agl) {
+void StateMachine::on_descent(const SensorFrame& f, double /*agl*/) {
   if (baro_failed_) return;  // no altitude, no landing detection (not safety-relevant)
-  // Landed = altitude stays within +-band of a reference sample for the
+  // Landed = filtered altitude stays within +-band of a reference for the
   // duration. Leaving the band, or a frame gap, restarts the window.
-  const bool restart = !land_ref_init_ || std::fabs(agl - land_ref_m_) > cfg_.landing_band_m ||
+  const double h = land_filt_m_;
+  const bool restart = !land_ref_init_ || std::fabs(h - land_ref_m_) > cfg_.landing_band_m ||
                        f.t - land_last_t_ > cfg_.max_frame_gap_s;
   if (restart) {
     land_ref_init_ = true;
-    land_ref_m_ = agl;
+    land_ref_m_ = h;
     land_start_t_ = f.t;
   }
   land_last_t_ = f.t;

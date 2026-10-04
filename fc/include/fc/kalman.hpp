@@ -18,6 +18,7 @@
 // positive semidefinite despite rounding.
 
 #include <array>
+#include <cstddef>
 
 namespace fc {
 
@@ -62,7 +63,7 @@ class Kalman3 {
   static Mat3 process_noise(double dt, double q);
 
  private:
-  UpdateResult update_scalar(int idx, double z, double r, double gate_sigma);
+  UpdateResult update_scalar(std::size_t idx, double z, double r, double gate_sigma);
 
   KalmanConfig cfg_;
   double r_baro_;

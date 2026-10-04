@@ -39,7 +39,8 @@ FcConfig baseline_cfg() {
 // Holds the first value seen inside [t0, t1) and returns it unchanged
 // thereafter: a frozen register, the realistic "stuck sensor".
 struct Freeze {
-  double t0, t1 = 1e9;
+  explicit Freeze(double start, double end = 1e9) : t0(start), t1(end) {}
+  double t0, t1;
   std::optional<double> held;
   double apply(double t, double v) {
     if (t < t0 || t >= t1) return v;
@@ -289,4 +290,28 @@ TEST(Faults, NoFalseLaunchIn1000SixtySecondPadSits_REQ002) {
   }
   EXPECT_EQ(false_launches, 0);
   EXPECT_EQ(false_failures, 0);
+}
+
+// ------------------------------------------------------ REQ-010 landing --
+
+TEST(Faults, LandingNotDefeatedByNoiseExtremes_REQ010) {
+  // Regression test for a flaw found by the SIL Monte Carlo: when the
+  // landing window restarted, it took the out-of-band sample (a noise
+  // extreme) as its new reference, so on the ground the reference ping-ponged
+  // between +-1.6 m extremes and LANDED could be delayed indefinitely.
+  Profile p;
+  const double t_ap = p.apogee_t(), z_ap = p.apogee_z();
+  const double t_land = t_ap + z_ap / 3.8;
+  auto alt = [&](double t) { return t <= t_ap ? p.alt(t) : std::max(0.0, z_ap - 3.8 * (t - t_ap)); };
+  auto acc = [&](double t) { return t <= t_ap ? p.accel(t) : kG; };
+  int late = 0;
+  for (unsigned seed = 1; seed <= 60; ++seed) {
+    StateMachine sm;
+    Trace tr;
+    drive(sm, tr, -300, static_cast<int>((t_land + 30.0) / kDt), kDt, alt, acc, Sensors::nominal(), seed);
+    const double t_landed = tr.first(FlightState::Landed);
+    if (std::isnan(t_landed) || t_landed - t_land > 10.0) ++late;
+    else EXPECT_GT(t_landed - t_land, 3.0) << seed;   // never "landed" while still well above ground
+  }
+  EXPECT_EQ(late, 0);
 }
