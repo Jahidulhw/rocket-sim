@@ -51,5 +51,44 @@
       "dt_s": 0.005,
       "max_time_s": 900.0
     }
+  },
+  "geometry": {
+    "nose": {
+      "shape": "ogive",
+      "length_m": 0.3,
+      "diameter_m": 0.056,
+      "mass_kg": 0.18
+    },
+    "body": [
+      {
+        "type": "tube",
+        "length_m": 1.3,
+        "diameter_m": 0.056,
+        "mass_kg": 0.55
+      }
+    ],
+    "fins": [
+      {
+        "count": 3,
+        "root_chord_m": 0.15,
+        "tip_chord_m": 0.06,
+        "semispan_m": 0.053,
+        "sweep_m": 0.1,
+        "root_le_from_tail_m": 0.15,
+        "mass_kg": 0.12
+      }
+    ],
+    "masses": [
+      {
+        "name": "avionics bay (FC, battery)",
+        "mass_kg": 0.15,
+        "position_m": 0.62
+      },
+      {
+        "name": "drogue + main + harness",
+        "mass_kg": 0.25,
+        "position_m": 0.45
+      }
+    ]
   }
 }

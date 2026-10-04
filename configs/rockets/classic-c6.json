@@ -71,5 +71,44 @@
       "integrator": "rk4",
       "max_time_s": 600.0
     }
+  },
+  "geometry": {
+    "nose": {
+      "shape": "ogive",
+      "length_m": 0.075,
+      "diameter_m": 0.0248,
+      "mass_kg": 0.006
+    },
+    "body": [
+      {
+        "type": "tube",
+        "length_m": 0.3,
+        "diameter_m": 0.0248,
+        "mass_kg": 0.011
+      }
+    ],
+    "fins": [
+      {
+        "count": 3,
+        "root_chord_m": 0.06,
+        "tip_chord_m": 0.03,
+        "semispan_m": 0.039,
+        "sweep_m": 0.03,
+        "root_le_from_tail_m": 0.06,
+        "mass_kg": 0.007
+      }
+    ],
+    "masses": [
+      {
+        "name": "chute + shock cord + wadding",
+        "mass_kg": 0.01,
+        "position_m": 0.14
+      },
+      {
+        "name": "motor mount, lug, glue",
+        "mass_kg": 0.006,
+        "position_m": 0.28
+      }
+    ]
   }
 }

@@ -46,5 +46,44 @@
     "sim": {
       "dt_s": 0.005
     }
+  },
+  "geometry": {
+    "nose": {
+      "shape": "ogive",
+      "length_m": 0.055,
+      "diameter_m": 0.0187,
+      "mass_kg": 0.003
+    },
+    "body": [
+      {
+        "type": "tube",
+        "length_m": 0.26,
+        "diameter_m": 0.0187,
+        "mass_kg": 0.007
+      }
+    ],
+    "fins": [
+      {
+        "count": 3,
+        "root_chord_m": 0.05,
+        "tip_chord_m": 0.025,
+        "semispan_m": 0.026,
+        "sweep_m": 0.025,
+        "root_le_from_tail_m": 0.05,
+        "mass_kg": 0.004
+      }
+    ],
+    "masses": [
+      {
+        "name": "chute + shock cord + wadding",
+        "mass_kg": 0.006,
+        "position_m": 0.11
+      },
+      {
+        "name": "motor block, lug, glue",
+        "mass_kg": 0.002,
+        "position_m": 0.23
+      }
+    ]
   }
 }

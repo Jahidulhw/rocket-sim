@@ -1,24 +1,20 @@
 {
-  "id": "kestrel-g80",
-  "order": 3,
+  "id": "my-rocket",
+  "label": "My rocket",
   "category": "hobby-large",
-  "label": "Kestrel (large hobby, G80T-11)",
-  "description": "Generic large sport rocket: 41.6 mm (BT-60 size) body, 29 mm motor mount, cardboard and plywood construction, AeroTech G80T-11, 30 in chute on the 11 s motor ejection charge.",
+  "order": 99,
+  "description": "Copy this file, edit the numbers, then run: python scripts/check_rocket.py my_rocket.json",
   "notes": {
-    "mass": "400 g airframe: ~1 m of 41.6 mm tube, plywood fins, payload bay, 30 in nylon chute and 29 mm mount (a 320 g first draft was light for this size and over-flew comparable G-motor sport rockets, which typically reach ~760-1070 m)",
-    "cd": "0.60: larger, smoother airframe than the small kits",
-    "recovery": "single 30 in chute: ~0.5 kg descends at ~5 m/s",
-    "rail": "1.5 m rod/rail for a G motor (higher rail-exit speed needed)",
-    "delay": "11 s (within the G80T's listed 6-14 s): true apogee comes 11.1 s after burnout; a 7 s delay opened the chute ~4 s early at ~42 m/s"
+    "how_to": "All units SI (m, kg, s). 'flight' is the point-mass flight config (see configs/default.json for every field); 'geometry' drives the Barrowman stability check and must agree with it: component masses sum to flight.rocket.dry_mass_kg (2 %), and the largest body diameter equals flight.rocket.body_diameter_m (1 %). Motors: any .eng file in data/motors/. Two-stage: add a 'booster' section and split geometry into 'sustainer'/'booster' (see configs/rockets/argo-2stage.json)."
   },
   "expected": {
     "apogee_m": [
-      450,
-      1100
+      1,
+      100000
     ],
     "max_mach": [
-      0.4,
-      0.8
+      0,
+      3
     ]
   },
   "flight": {
@@ -47,6 +43,7 @@
       "dt_s": 0.005
     }
   },
+  "booster": null,
   "geometry": {
     "nose": {
       "shape": "ogive",

@@ -13,7 +13,7 @@ from sim.atmosphere import density, speed_of_sound
 from sim.config import REPO_ROOT, FlightConfig, apply_overrides
 from sim.fleet import CATEGORIES, PRESET_DIR, fly_preset, load_fleet, preset_from_dict, preset_motors
 from sim.flight import simulate
-from sim.motor import DelayedMotor, build_motor, load_eng
+from sim.motor import DelayedMotor, build_motor
 
 FLEET = {p.id: p for p in load_fleet()}
 DEFAULT = REPO_ROOT / "configs" / "default.json"

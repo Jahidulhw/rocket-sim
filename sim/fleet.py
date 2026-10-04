@@ -27,7 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import REPO_ROOT, FlightConfig
+from .design import Geometry, StabilityReport, assess, build_geometry
 from .flight import FlightResult, simulate
+from .motor import build_motor
 from .staging import BoosterSpec, StagedResult, simulate_staged
 
 PRESET_DIR = REPO_ROOT / "configs" / "rockets"
@@ -94,9 +96,56 @@ def preset_from_dict(d: dict, path: Path | None = None) -> Preset:
             booster.validate()
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{where}: booster: {exc}") from exc
-    return Preset(id=d["id"], label=d["label"], category=d["category"], order=int(d.get("order", 99)),
-                  description=d["description"], flight=flight, booster=booster, geometry=d.get("geometry"),
-                  expected=d.get("expected", {}), notes=d.get("notes", {}), path=path)
+    if "geometry" not in d:
+        raise ValueError(f"{where}: missing required key 'geometry' (needed for the stability check)")
+    preset = Preset(id=d["id"], label=d["label"], category=d["category"], order=int(d.get("order", 99)),
+                    description=d["description"], flight=flight, booster=booster, geometry=d["geometry"],
+                    expected=d.get("expected", {}), notes=d.get("notes", {}), path=path)
+    try:
+        geometries(preset)          # validates the geometry and its agreement with the flight config
+    except ValueError as exc:
+        raise ValueError(f"{where}: {exc}") from exc
+    return preset
+
+
+def _agree(geom: Geometry, rocket, label: str) -> None:
+    """Geometry and flight config must describe the same airframe."""
+    if abs(geom.dry_mass_kg - rocket.dry_mass_kg) > 0.02 * rocket.dry_mass_kg:
+        raise ValueError(f"{label} geometry component masses sum to {geom.dry_mass_kg:.4f} kg but "
+                         f"rocket.dry_mass_kg is {rocket.dry_mass_kg:.4f} kg (must agree within 2 %)")
+    if abs(geom.max_diameter_m - rocket.body_diameter_m) > 0.01 * rocket.body_diameter_m:
+        raise ValueError(f"{label} geometry max diameter {geom.max_diameter_m:.4f} m but "
+                         f"rocket.body_diameter_m (drag reference) is {rocket.body_diameter_m:.4f} m")
+
+
+def geometries(preset: Preset) -> dict:
+    """Validated geometry per stage: {'sustainer': Geometry[, 'booster': Geometry]}."""
+    g = preset.geometry
+    if preset.booster is None:
+        geom = build_geometry(g)
+        _agree(geom, preset.flight.rocket, "")
+        return {"sustainer": geom}
+    if set(g) != {"sustainer", "booster"}:
+        raise ValueError("two-stage geometry needs exactly 'sustainer' and 'booster' sections")
+    sust = build_geometry(g["sustainer"])
+    boost = build_geometry(g["booster"], x0=sust.length_m, reference_diameter_m=sust.reference_diameter_m,
+                           require_nose=False)
+    if "nose" in g["booster"]:
+        raise ValueError("booster geometry must not have a nose (it starts at the sustainer's tail)")
+    _agree(sust, preset.flight.rocket, "sustainer")
+    _agree(boost, preset.booster.flight.rocket, "booster")
+    return {"sustainer": sust, "booster": boost}
+
+
+def preset_stability(preset: Preset) -> dict[str, StabilityReport]:
+    """Static stability of every configuration the rocket flies in: the whole
+    rocket, or for a two-stage the full stack AND the sustainer alone."""
+    geo = geometries(preset)
+    sust = (geo["sustainer"], build_motor(preset.flight.motor))
+    if preset.booster is None:
+        return {"rocket": assess([sust])}
+    boost = (geo["booster"], build_motor(preset.booster.flight.motor))
+    return {"stack": assess([sust, boost]), "sustainer": assess([sust])}
 
 
 def load_preset(path: str | Path) -> Preset:

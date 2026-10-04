@@ -74,5 +74,86 @@
     },
     "sustainer_ignition_delay_s": 1.0,
     "stack_cd": 0.55
+  },
+  "geometry": {
+    "sustainer": {
+      "nose": {
+        "shape": "ogive",
+        "length_m": 0.28,
+        "diameter_m": 0.056,
+        "mass_kg": 0.15
+      },
+      "body": [
+        {
+          "type": "tube",
+          "length_m": 1.0,
+          "diameter_m": 0.056,
+          "mass_kg": 0.4
+        }
+      ],
+      "fins": [
+        {
+          "count": 3,
+          "root_chord_m": 0.12,
+          "tip_chord_m": 0.05,
+          "semispan_m": 0.046,
+          "sweep_m": 0.08,
+          "root_le_from_tail_m": 0.12,
+          "mass_kg": 0.1
+        }
+      ],
+      "masses": [
+        {
+          "name": "avionics bay (FC, battery)",
+          "mass_kg": 0.15,
+          "position_m": 0.55
+        },
+        {
+          "name": "drogue + main + harness",
+          "mass_kg": 0.2,
+          "position_m": 0.4
+        }
+      ]
+    },
+    "booster": {
+      "body": [
+        {
+          "type": "transition",
+          "length_m": 0.08,
+          "fore_diameter_m": 0.056,
+          "aft_diameter_m": 0.08,
+          "mass_kg": 0.08
+        },
+        {
+          "type": "tube",
+          "length_m": 0.8,
+          "diameter_m": 0.08,
+          "mass_kg": 0.55
+        }
+      ],
+      "fins": [
+        {
+          "count": 4,
+          "root_chord_m": 0.18,
+          "tip_chord_m": 0.08,
+          "semispan_m": 0.054,
+          "sweep_m": 0.12,
+          "root_le_from_tail_m": 0.18,
+          "mass_kg": 0.25
+        }
+      ],
+      "masses": [
+        {
+          "name": "booster chute + harness",
+          "mass_kg": 0.12,
+          "position_m": 0.25
+        },
+        {
+          "name": "54 mm motor mount + rings",
+          "mass_kg": 0.1,
+          "position_m": 0.7
+        }
+      ]
+    }
   }
 }
