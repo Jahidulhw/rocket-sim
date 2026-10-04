@@ -33,7 +33,7 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m pytest                       # 199 tests (93 physics + 106 SIL), ~2.5 min; SIL needs fc/ built (see below)
+python -m pytest                       # 362 tests (93 physics + 106 SIL + 163 fleet), ~5 min; SIL needs fc/ built
 python scripts/run_flight.py           # one flight: summary + out/flight/{flight.json,flight.png}
 python scripts/run_montecarlo.py       # 500 dispersed flights: stats + out/montecarlo/*
 python scripts/build_site.py           # regenerate all viewer data into web/data/
@@ -168,7 +168,7 @@ All of these live in [`configs/default.json`](configs/default.json), which lists
 
 ## How the tests validate the physics
 
-`python -m pytest`: 93 physics tests (plus 106 SIL tests, see [Software-in-the-loop flight computer](#software-in-the-loop-flight-computer)), all passing. Each physics test
+`python -m pytest`: 93 physics tests (plus 106 SIL and 163 fleet tests, see [Software-in-the-loop flight computer](#software-in-the-loop-flight-computer) and [The fleet](#the-fleet)), all passing. Each physics test
 compares the simulator with an independent answer: a closed-form solution, a
 conservation law, a published value, or a property any correct implementation must have.
 
@@ -263,6 +263,15 @@ step and no npm.
 * Responsive (desktop and phone), follows the OS light/dark setting, and shows a
   visible error if data fails to load.
 * URL parameters: `?data=windy`, `?t=12` (start paused at 12 s), `?cam=follow`.
+* **Rocket picker.** The dataset menu is grouped into Flights, Flight
+  computer, Fleet and Monte Carlo. Each fleet rocket is drawn as a procedural
+  model built from its real dimensions: lathe-turned nose and body,
+  trapezoidal fins. Radial sizes are exaggerated 2.5×, because high-power
+  rockets are too slender to see at true proportions.
+* **Two-stage separation.** The booster rides under the sustainer until
+  separation, then falls along its own (dashed) path, with its own chute, to
+  "Booster lands". Dual-deploy rockets show the canopy growing when the main
+  opens. `?dist=<m>` sets the follow-camera distance.
 * **SIL datasets** ("SIL nominal", "SIL faults"):
   * The telemetry panel adds the FC's state and its altitude and velocity
     estimates.
@@ -485,9 +494,168 @@ python scripts/verification_report.py                      # -> docs/verificatio
 
 ---
 
+## The fleet
+
+Five documented preset rockets in [`configs/rockets/`](configs/rockets/), from
+a 40 g mini rocket to a two-stage sounding rocket, are flown by the same
+physics and the same C++ flight computer. They are hobby, high-power and
+generic research designs only; none is modelled on a real vehicle, and
+staging is passive.
+
+| Rocket | Category | Motor(s) | Apogee | Max speed | Max Mach | Landing |
+|---|---|---|---:|---:|---:|---:|
+| Sparrow | hobby-small | B6-6 | 269 m | 103 m/s | 0.30 | 152 m |
+| Classic | hobby-medium | C6-5 | 314 m | 102 m/s | 0.30 | 175 m |
+| Kestrel | hobby-large | G80T-11 | 1,091 m | 221 m/s | 0.65 | 489 m |
+| Swift | high-power | K940-P | 4,110 m | 605 m/s | 1.79 | 770 m |
+| Argo | sounding-two-stage | K454-10 + J381-P | 4,039 m | 496 m/s | 1.48 | 890 m |
+
+*(Open-loop flights, default 2 m/s wind. `python scripts/check_rocket.py
+configs/rockets/<id>.json` prints any row.)*
+
+Each preset documents its masses, Cd, recovery, rail, motor delays and FC
+settings, with the reason for every value. Motor delays were chosen against
+the rocket's **true** (chute-free) apogee: a chute opened before apogee
+truncates the climb and hides how early it was.
+
+### Motor library
+
+12 thrust curves from the [thrustcurve.org](https://www.thrustcurve.org) API,
+covering classes A to K: A10, B6, C6, D12, E16, F15, G80T, H151, I180, J381,
+K454 and K940.
+* **Provenance.** Each file's header records its motorId, simfileId, data
+  source and the published summary.
+* **Selection rule.** `scripts/fetch_motors.py` picks, per motor, a simfile
+  whose curve integrates to **within 1 % of the listed total impulse**,
+  preferring certification data.
+* **Rejected motors.** Popular motors whose every published curve misses by
+  more (the AeroTech K1100T's certification curve is +7.7 %, the Estes A8's
+  −7 % or −14 %) were rejected rather than rescaled.
+* **Data sources.** 11 of the 12 files are certification data. The D12 is a
+  user-submitted curve, the only one available for it.
+
+### Atmosphere and Mach-dependent drag
+
+* **Atmosphere: US Standard Atmosphere 1976** layers up to 84.9 km, with
+  temperature, pressure, density and speed of sound, checked against the
+  table values.
+  * The layers are applied to the simulator's altitude. With constant
+    gravity, geopotential and geometric altitude coincide.
+  * The 0–20 km density formulas are kept verbatim, so the original rocket
+    sees bit-identical air.
+* **Drag: a per-rocket Cd(M)** ([`sim/aero.py`](sim/aero.py)). The body drag
+  coefficient follows a C1-continuous empirical curve scaled from the subsonic
+  value:
+  * flat to Mach 0.8;
+  * rising to 1.9 × at Mach 1.1 (the transonic rise);
+  * falling to 1.35 × at Mach 2.
+
+  The shape is approximate, from S. Niskanen's OpenRocket technical
+  documentation, and configurable. Below Mach 0.8 it is *exactly* the
+  constant-Cd model, so subsonic rockets are unaffected (regression-pinned).
+* **Effect.** The supersonic Swift flies about 21 % lower with it than with a
+  constant Cd, and the transonic drag rise later mattered for the flight
+  computer too.
+
+### Passive two-stage flight
+
+[`sim/staging.py`](sim/staging.py) flies the two-stage Argo as three phases,
+all with the same integrator:
+
+1. **The stack** lifts off on the booster motor (stack mass and drag, the
+   sustainer's motor carried unlit).
+2. **Separation at booster burnout** is *drag separation*. There is no
+   separation charge: the spent booster's ballistic coefficient (mass / Cd A)
+   is about 4× lower, so it falls away on its own. Both bodies start with the
+   stack's position and velocity, which conserves momentum exactly; mass is
+   split by components (tested).
+3. **The sustainer** coasts for a pre-set 1.0 s, then its motor lights
+   passively, with no flight computer command. **The spent booster** is
+   tracked as its own body, with its own drag and its own motor-ejection
+   chute, and lands separately.
+
+### Stability check (Barrowman) and design-your-own
+
+[`sim/design.py`](sim/design.py) checks static stability. It's a *design*
+check; the point-mass flight assumes stability rather than computing it.
+* **Inputs.** A validated geometry schema: nose (ogive, cone or parabolic),
+  tubes, conical transitions, 3- or 4-fin trapezoidal sets, point masses and
+  the motor mount.
+* **Method.** The Barrowman center of pressure, a CG from component masses
+  at liftoff and at burnout, and the static margin in calibers.
+* **Validation.** It reproduces R. Nakka's worked Barrowman example (the
+  Xi-41: every component, and CP 42.08 in, which RASAero also gives).
+* **Thresholds.** It warns below **1.0 caliber**, at liftoff or burnout:
+  Barrowman neglects body lift, and the real CP moves about 1 caliber forward
+  at 8° angle of attack. It warns above **3.0 calibers at liftoff**: strong
+  weathercocking off the rail. A heavy motor burning out of the tail makes a
+  high burnout margin unavoidable and harmless.
+* **The fleet.** Every preset sits at 1.8–2.1 cal at liftoff. Argo is checked
+  as a full stack *and* as the sustainer alone.
+
+Design your own rocket by copying
+[`configs/custom_rocket_template.json`](configs/custom_rocket_template.json),
+then run:
+
+```bash
+python scripts/check_rocket.py my_rocket.json    # validate (field-named errors), stability, fly
+```
+
+### The flight computer across the fleet
+
+Each preset's `sil` section holds:
+* its FC parameters, each derived by a rule anchored on the C6 (the backup
+  timer is the true apogee plus max(1 s, 4σ), and so on);
+* its sensor model, with a ±200 g accelerometer for the K-motor rockets;
+* its SIL motor delays.
+
+The filter's measurement noise is always derived from the sensor model.
+
+**Two burns.**
+* The FC knows only *how many* burns to expect. After the first burnout it
+  waits, with deployment, apogee detection and gating locked out, for the
+  sustainer's thrust.
+* A dud sustainer times out into normal apogee detection.
+* Any burn detected in coast returns the FC to BOOST.
+* New requirements: **REQ-011** (no deployment before the final burnout,
+  under any fault) and **REQ-012** (staging never reported as apogee or
+  landing).
+
+**Dual deploy.**
+* The high-power rockets open a drogue at apogee. The FC commands the main
+  at 300 m (**REQ-013**: within 25 m), or with the drogue if the barometer
+  has failed.
+* The reply's deploy field became a bitmask; single-deploy replies are
+  unchanged.
+
+**What the fleet runs found.** Nominal flights of every new rocket made the
+filter declare itself inconsistent. A test-only `--trace` flag showed why: on
+a long motor tail-off, burnout is detected about 0.15 s before thrust ends,
+and the coast process noise can't follow the falling acceleration. The fix
+was phase-dependent process noise. A later campaign found the same mechanism
+in the transonic drag rise of the supersonic coast. Both have end-to-end
+regression tests, and the walkthrough §9 records the hypotheses that were
+tested and rejected along the way.
+
+**Fleet-wide verification**: `python scripts/run_sil_fleet.py` (500 SIL runs
+plus 1000 pad sits per rocket), summarised in
+[`docs/verification_report.md`](docs/verification_report.md) §5b:
+
+| Rocket | 001 | 003 | 004 | 005 | 009 | 010 | 011 | 012 | 013 | Pad sits | Replays |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sparrow | 213/213 | 500/500 | 252/252 | 35/35 | 213/213 | 213/213 | – | – | – | 1000/1000 | 5/5 |
+| Classic | 213/213 | 500/500 | 252/252 | 35/35 | 213/213 | 213/213 | – | – | – | 1000/1000 | 5/5 |
+| Kestrel | 213/213 | 500/500 | 252/252 | 35/35 | 213/213 | 213/213 | – | – | – | 1000/1000 | 5/5 |
+| Swift | 213/213 | 500/500 | 252/252 | 35/35 | 213/213 | 213/213 | – | – | 213/213 | 1000/1000 | 5/5 |
+| Argo | 213/213 | 500/500 | 252/252 | 35/35 | 213/213 | 213/213 | 500/500 | 500/500 | 213/213 | 1000/1000 | 5/5 |
+
+Every applicable requirement passed on every rocket: 2,500 SIL flights and 5,000 pad sits in all. Nominal FC deploys came +0.043 to +0.045 s after true apogee on every rocket (worst case 0.079 s), and there were zero backup-timer deploys on nominal flights.
+
+---
+
 ## CI and deploy
 
-* [`.github/workflows/tests.yml`](.github/workflows/tests.yml): on every push and pull request, builds `fc/` with CMake and g++ (warnings are errors), runs ctest, then runs pytest on Python 3.11. pytest includes the SIL tests, which use the built executable.
+* [`.github/workflows/tests.yml`](.github/workflows/tests.yml): on every push and pull request, builds `fc/` with CMake and g++ (warnings are errors), runs ctest, then runs pytest on Python 3.11. pytest includes the SIL and fleet tests, which use the built executable. Finally it runs `build_site.py`, which flies every fleet preset closed loop on the Linux build and enforces the site-size budget.
 * [`.github/workflows/pages.yml`](.github/workflows/pages.yml): on push to `main`, it:
   1. installs dependencies;
   2. builds the flight computer;
@@ -520,14 +688,20 @@ rocket-sim/
   fc/                C++17 flight computer (CMake): include/fc/{protocol,state_machine,kalman,config,runner}.hpp,
                      src/ (+ main.cpp stdin/stdout loop), tests/ (GoogleTest, 69 tests)
   sim/ (SIL)         sensors.py, faults.py, protocol.py, sil.py, requirements.py, sil_montecarlo.py
+  sim/ (fleet)       aero.py (Cd vs Mach), staging.py (passive two-stage), fleet.py (presets), design.py (Barrowman)
+  configs/rockets/   five documented presets; configs/custom_rocket_template.json for your own design
   docs/              requirements.md, protocol.md, fc_walkthrough.md, verification_report.md (generated)
   scripts/
     run_sil.py           one SIL flight (events, deploy timing, requirement verdicts); --fault, --compare
     run_sil_montecarlo.py  500 SIL runs x 2 detectors + 1000 pad sits -> out/sil_mc/results.json
+    run_sil_fleet.py       500 SIL runs + 1000 pad sits per fleet preset -> out/sil_fleet/
+    check_rocket.py        design-your-own: validate, stability (Barrowman), fly
+    fetch_motors.py        thrust curves from thrustcurve.org (1 % impulse rule, provenance headers)
+    make_regression_baseline.py  records the pinned default-C6 results (tests/test_regression_c6.py)
     verification_report.py results + tagged test XML -> docs/verification_report.md
     run_flight.py        one flight -> summary, JSON, plots
     run_montecarlo.py    N flights -> stats, JSON, scatter + histogram
-    build_site.py        regenerate web/data/ (default, windy, angled, SIL nominal/faults, dispersion)
+    build_site.py        regenerate web/data/ (flights, SIL, every fleet preset, dispersion)
     check_viewer.py      headless-browser smoke test of the viewer
   web/               index.html, main.js, style.css, data/ (generated)
   docs/              screenshots used in this README

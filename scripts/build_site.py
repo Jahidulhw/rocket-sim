@@ -20,11 +20,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from sim.config import FlightConfig, apply_overrides  # noqa: E402
-from sim.export import flight_to_dict, montecarlo_to_dict, sil_flight_to_dict, write_json  # noqa: E402
+from sim.export import (fleet_flight_to_dict, flight_to_dict, montecarlo_to_dict,  # noqa: E402
+                        sil_flight_to_dict, write_json)
+from sim.fleet import load_fleet, preset_motors  # noqa: E402
 from sim.faults import Fault  # noqa: E402
 from sim.flight import simulate  # noqa: E402
 from sim.montecarlo import MonteCarloConfig, default_workers, run_monte_carlo  # noqa: E402
-from sim.sil import SilConfig, run_sil, sil_flight_config  # noqa: E402
+from sim.sil import SilConfig, run_sil, run_sil_preset, sil_flight_config  # noqa: E402
 
 DATA_DIR = REPO_ROOT / "web" / "data"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "default.json"
@@ -55,7 +57,7 @@ def build_flights(base: FlightConfig) -> list[dict]:
         print(f"  {sc['id']:<8} apogee {s['apogee_m']:6.1f} m  landing {s['landing_distance_m']:6.1f} m  "
               f"samples {len(data['trajectory']['t']):5d}  -> {path.relative_to(REPO_ROOT)} "
               f"({path.stat().st_size / 1024:.0f} KiB)")
-        entries.append({"id": sc["id"], "kind": "flight", "label": sc["label"],
+        entries.append({"id": sc["id"], "kind": "flight", "label": sc["label"], "group": "Flights",
                         "description": sc["description"], "file": path.name})
     return entries
 
@@ -74,6 +76,27 @@ SIL_SCENARIOS = [
 ]
 
 
+SITE_BUDGET_MB = 15.0   # GitHub Pages is fine far beyond this; it keeps first loads quick
+
+
+def build_fleet() -> list[dict]:
+    """One closed-loop SIL dataset per fleet preset (its own FC configuration
+    and sensor model), with the rocket's geometry and, for two-stage rockets,
+    the booster's own track."""
+    entries = []
+    for preset in load_fleet():
+        res = run_sil_preset(preset, SilConfig(seed=1, pre_launch_s=5.0, post_landing_s=12.0))
+        desc = f"{preset.description} Flown closed loop by the C++ flight computer ({preset_motors(preset)})."
+        data = fleet_flight_to_dict(res, preset, label=preset.label, description=desc)
+        path = write_json(data, DATA_DIR / f"fleet_{preset.id}.json")
+        dep = data["sil"]["deploy"]
+        print(f"  {preset.id:13} apogee {res.flight.apogee_m:6.0f} m  FC deploy {dep['dt_s']:+.3f} s ({dep['reason']})"
+              f"  -> {path.relative_to(REPO_ROOT)} ({path.stat().st_size / 1024:.0f} KiB)")
+        entries.append({"id": f"fleet_{preset.id}", "kind": "flight", "label": preset.label, "group": "Fleet",
+                        "description": desc, "file": path.name})
+    return entries
+
+
 def build_sil(base: FlightConfig) -> list[dict]:
     cfg = sil_flight_config(base)
     entries = []
@@ -84,7 +107,7 @@ def build_sil(base: FlightConfig) -> list[dict]:
         dep = data["sil"]["deploy"]
         print(f"  {sc['id']:<12} FC deploy {dep['dt_s']:+.3f} s vs true apogee ({dep['reason']}, chute by "
               f"{dep['mechanism']})  -> {path.relative_to(REPO_ROOT)} ({path.stat().st_size / 1024:.0f} KiB)")
-        entries.append({"id": sc["id"], "kind": "flight", "label": sc["label"],
+        entries.append({"id": sc["id"], "kind": "flight", "label": sc["label"], "group": "Flight computer (SIL)",
                         "description": sc["description"], "file": path.name})
     return entries
 
@@ -101,7 +124,7 @@ def build_dispersion(base: FlightConfig) -> dict:
     print(f"  dispersion {mc.n_runs} runs in {time.perf_counter() - t0:.1f} s: apogee "
           f"{st['apogee']['mean_m']:.1f} +- {st['apogee']['std_m']:.1f} m, drift p95 {st['drift']['p95_m']:.1f} m"
           f"  -> {path.relative_to(REPO_ROOT)} ({path.stat().st_size / 1024:.0f} KiB)")
-    return {"id": "dispersion", "kind": "montecarlo", "label": "Dispersion (Monte Carlo)",
+    return {"id": "dispersion", "kind": "montecarlo", "label": "Dispersion (Monte Carlo)", "group": "Monte Carlo",
             "description": desc, "file": path.name}
 
 
@@ -116,9 +139,15 @@ def main(argv=None) -> int:
     if not args.no_sil:
         print("Building SIL datasets (C++ flight computer):")
         entries += build_sil(base)
+        print("Building fleet datasets (every preset, closed loop):")
+        entries += build_fleet()
     print("Building Monte Carlo dataset:")
     entries.append(build_dispersion(base))
     write_json({"schema_version": 1, "datasets": entries}, DATA_DIR / "index.json")
+    total = sum(f.stat().st_size for f in DATA_DIR.glob("*.json")) / 1024 / 1024
+    print(f"Site data: {total:.1f} MB (budget {SITE_BUDGET_MB:.0f} MB)")
+    if total > SITE_BUDGET_MB:
+        raise SystemExit(f"site data {total:.1f} MB exceeds the {SITE_BUDGET_MB:.0f} MB budget")
     print(f"Wrote web/data/index.json with {len(entries)} datasets in {time.perf_counter() - t0:.1f} s")
     return 0
 

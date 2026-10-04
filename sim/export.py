@@ -126,7 +126,8 @@ def _num_or_none(v, nd):
     return round(v, nd) if math.isfinite(v) else None
 
 
-def sil_flight_to_dict(sil_result, fc_mode: str, label: str = "", description: str = "") -> dict:
+def sil_flight_to_dict(sil_result, fc_mode: str, label: str = "", description: str = "",
+                       rate_hz: float = SAMPLE_RATE_HZ, sil_rate_hz: float = SIL_RATE_HZ) -> dict:
     """Flight dataset plus a "sil" section: FC state per sample, estimated vs
     true altitude, delivered barometer, fault intervals, FC deploy decision
     (time, reason, mechanism) and FC health events. The viewer's timeline
@@ -136,11 +137,11 @@ def sil_flight_to_dict(sil_result, fc_mode: str, label: str = "", description: s
     from .requirements import true_apogee_t
 
     res = sil_result
-    d = flight_to_dict(res.flight, label=label, description=description)
+    d = flight_to_dict(res.flight, label=label, description=description, rate_hz=rate_hz)
     T = res.flight.flight_time_s
     log = res.log
     keep = np.flatnonzero((log["t"] >= -1e-9) & (log["t"] <= T + 1e-9))
-    keep = keep[:: max(1, round(100 / SIL_RATE_HZ))]
+    keep = keep[:: max(1, round(100 / sil_rate_hz))]
     state_idx = [FC_STATES.index(s) if s else -1 for s in log["fc_state"][keep]]
     series = {"t": _r(log["t"][keep], 3),
               "true_alt": _r(log["z_true"][keep], 2),
@@ -178,4 +179,31 @@ def sil_flight_to_dict(sil_result, fc_mode: str, label: str = "", description: s
         "fc_failed": {"failed": res.fc_failed, "t": res.failure_t, "reason": res.failure_reason},
         "protocol_errors": res.protocol_errors,
     }
+    return _clean(d)
+
+
+# ---------------------------------------------------------------- fleet --
+
+LONG_FLIGHT_S = 120.0     # longer flights are exported at reduced rates (site size)
+
+
+def fleet_flight_to_dict(sil_result, preset, label: str = "", description: str = "") -> dict:
+    """SIL flight of a fleet preset for the viewer: the SIL dataset plus the
+    rocket's geometry (procedural 3D model) and, for two-stage rockets, the
+    spent booster's own track. Flights longer than 2 minutes (the high-power
+    rockets, ~7 min under parachute) are exported at 20 Hz trajectory / 25 Hz
+    FC series instead of 60 / 50 Hz: playback is still smooth and the
+    datasets stay ~1 MB."""
+    long = sil_result.flight.flight_time_s > LONG_FLIGHT_S
+    d = sil_flight_to_dict(sil_result, "kalman", label=label, description=description,
+                           rate_hz=20.0 if long else SAMPLE_RATE_HZ, sil_rate_hz=25.0 if long else SIL_RATE_HZ)
+    d["rocket"] = {"id": preset.id, "category": preset.category, "two_stage": preset.two_stage,
+                   "geometry": preset.geometry,
+                   "body_diameter_m": preset.flight.rocket.body_diameter_m}
+    b = sil_result.booster
+    if b is not None:
+        t = resample_times(b.flight_time_s, 20.0 if long else SAMPLE_RATE_HZ)
+        d["booster"] = {"t": _r(t, 3), **{c: _r(np.interp(t, b.t, b.position[:, k]), 2) for k, c in enumerate("xyz")},
+                        **{v: _r(np.interp(t, b.t, b.velocity[:, k]), 2) for k, v in enumerate(("vx", "vy", "vz"))},
+                        "events": [_clean(e.to_dict()) for e in sorted(b.events.values(), key=lambda e: e.t)]}
     return _clean(d)
