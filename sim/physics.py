@@ -69,6 +69,8 @@ class Dynamics:
         self.rho0 = cfg.atmosphere.sea_level_density_kg_m3
         self.h0 = cfg.atmosphere.launch_altitude_m
         self.chute_area = math.pi * cfg.recovery.chute_diameter_m ** 2 / 4.0
+        rec = cfg.recovery
+        self.main_area = math.pi * rec.main_diameter_m ** 2 / 4.0 if rec.main_diameter_m is not None else 0.0
         self.wind = cfg.wind
         self.calm = cfg.wind.speed_mps == 0.0
         # None = constant body Cd (the original model, used by the default rocket).
@@ -90,7 +92,9 @@ class Dynamics:
         if self.has_air:
             # Wind enters ONLY here, through the air-relative velocity.
             v_rel = v if self.calm else v - wind_velocity(y[2], self.wind)
-            if chute:  # chute replaces body drag once deployed (always subsonic: constant Cd)
+            if chute == 2:  # dual deploy: main replaces the drogue
+                cd, area = self.cfg.recovery.main_cd, self.main_area
+            elif chute:  # chute replaces body drag once deployed (always subsonic: constant Cd)
                 cd, area = self.cfg.recovery.chute_cd, self.chute_area
             else:
                 cd, area = self.body_cd(y[2], v_rel), self.body_area
@@ -133,7 +137,9 @@ class Dynamics:
         if not (chute and self.has_air):
             return math.inf
         v = y[3:6] if self.calm else y[3:6] - wind_velocity(y[2], self.wind)
-        k = self.air_density(y[2]) * self.cfg.recovery.chute_cd * self.chute_area * math.sqrt(v @ v)
+        cd_a = (self.cfg.recovery.main_cd * self.main_area if chute == 2
+                else self.cfg.recovery.chute_cd * self.chute_area)
+        k = self.air_density(y[2]) * cd_a * math.sqrt(v @ v)
         return math.inf if k <= 0.0 else 0.5 * y[6] / k
 
     def rail_acceleration(self, t: float, y: np.ndarray) -> float:

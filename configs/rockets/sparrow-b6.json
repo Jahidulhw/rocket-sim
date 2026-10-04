@@ -1,0 +1,50 @@
+{
+  "id": "sparrow-b6",
+  "order": 1,
+  "category": "hobby-small",
+  "label": "Sparrow (small hobby, B6-6)",
+  "description": "Generic small 18 mm-motor sport rocket on an Estes B6-6: BT-20-size body tube (18.7 mm), light balsa fins, 10 in plastic chute deployed by the motor's 6 s ejection charge.",
+  "notes": {
+    "mass": "22 g airframe + chute + wadding, typical for a ~30 cm BT-20 kit",
+    "cd": "0.70: small rockets run at low Reynolds number with proportionally large fins and launch lugs, so their total Cd is higher than the 0.5-0.6 of larger rockets",
+    "recovery": "single 10 in chute; a ~40 g rocket descends at ~4 m/s, fine for grass",
+    "rail": "0.9 m launch rod",
+    "delay": "6 s: true (chute-free) apogee comes 5.8 s after burnout; the common B6-4 would open the chute ~1.8 s early"
+  },
+  "expected": {
+    "apogee_m": [
+      120,
+      300
+    ],
+    "max_mach": [
+      0.1,
+      0.35
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 0.022,
+      "body_diameter_m": 0.0187,
+      "cd": 0.7,
+      "drag_model": "constant"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/Estes_B6.eng",
+      "ejection_delay_s": 6.0
+    },
+    "launch": {
+      "rail_length_m": 0.9
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.254,
+      "chute_cd": 0.75
+    },
+    "sim": {
+      "dt_s": 0.005
+    }
+  }
+}

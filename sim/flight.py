@@ -59,6 +59,8 @@ class FlightResult:
     events: dict             # name -> Event
     landed: bool
     deployment: dict = field(default_factory=dict)
+    next_tick_k: int = 0                 # controller tick index to continue from (staged flights)
+    final_state: np.ndarray | None = None  # y at the end (for continuing a staged flight)
 
     @property
     def apogee_m(self) -> float:
@@ -114,17 +116,24 @@ def resolve_deploy_delay(cfg: FlightConfig, motor) -> float | None:
     return getattr(motor, "ejection_delay_s", None)
 
 
-def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
+def simulate(cfg: FlightConfig, motor=None, controller=None, *, start=None, stop_time=None,
+             first_tick_k: int = 0) -> FlightResult:
     """Integrate one flight.
 
     `controller` (optional) closes the loop with a flight computer. It must
-    provide `period_s` and `tick(t, y, accel) -> bool`, and is called at every
-    t = k * period_s (k = 0, 1, ...) until landing; the integrator steps onto
-    those instants exactly. `accel` is the true acceleration vector at t
-    (zero while held on the pad). Returning True deploys the parachute at t,
-    unless it is already out. The motor's ejection charge stays active and
-    independent; `deployment["mechanism"]` records which fired first.
-    With controller=None the step sequence is exactly the open-loop one.
+    provide `period_s` and `tick(t, y, accel)`, and is called at every
+    t = k * period_s (k = first_tick_k, ...) until landing; the integrator
+    steps onto those instants exactly. `accel` is the true acceleration vector
+    at t (zero while held on the pad). The return value is a deploy command
+    bitmask: bit 0 (True/1) deploys the primary (drogue) chute, bit 1 (2) the
+    main chute of a dual-deploy rocket. The motor's ejection charge stays
+    active and independent; `deployment["mechanism"]` records which fired
+    first. With controller=None the step sequence is exactly the open-loop one.
+
+    Staged flights (sim/staging.py) use three more arguments, all inactive by
+    default: `start=(t0, y0)` begins in free flight at t0 with state y0 (no
+    pad, no rail); `stop_time` ends the integration there (separation);
+    `first_tick_k` continues the controller's tick grid across segments.
     """
     motor = motor if motor is not None else build_motor(cfg.motor)
     dyn = Dynamics(cfg, motor)
@@ -137,6 +146,8 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
     y[3:6] = cfg.launch.initial_speed_mps * u
     y[6] = cfg.rocket.dry_mass_kg + motor.total_mass
     t = 0.0
+    if start is not None:
+        t, y = float(start[0]), np.array(start[1], dtype=float)
 
     delay = resolve_deploy_delay(cfg, motor)
     t_deploy = motor.burn_time + delay if delay is not None else None
@@ -145,14 +156,24 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
     breakpoints = set(motor.breakpoints())
     if t_deploy is not None:
         breakpoints.add(t_deploy)
-    breakpoints = sorted(b for b in breakpoints if b > 0.0)
+    t_backup = cfg.recovery.backup_timer_s if cfg.recovery.enabled else None
+    if t_backup is not None:
+        breakpoints.add(t_backup)
+    ign_t = float(getattr(motor, "ignition_time", 0.0))   # >0: passively delayed ignition (sustainer)
+    if ign_t > 0.0:
+        breakpoints.add(ign_t)
+    if stop_time is not None:
+        breakpoints.add(stop_time)
+    breakpoints = sorted(b for b in breakpoints if b > t)
+    main_alt = cfg.recovery.main_deploy_altitude_m if cfg.recovery.main_diameter_m is not None else None
 
     events: dict[str, Event] = {}
-    on_pad = True
-    on_rail = rail_len > 0.0
-    burned_out = motor.burn_time <= 0.0
-    apogee_passed = False
-    chute = False
+    on_pad = start is None
+    on_rail = start is None and rail_len > 0.0
+    burned_out = motor.burn_time <= t
+    apogee_passed = start is not None and y[5] <= 0.0
+    ignited = t >= ign_t
+    chute = False      # False: none, True (== 1): primary/drogue, 2: main (dual deploy)
     landed = False
 
     def phase() -> str:
@@ -163,7 +184,7 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
         if on_rail:
             return "RAIL"
         if not burned_out:
-            return "BOOST"
+            return "BOOST" if ignited else "COAST"   # COAST: waiting for a delayed ignition
         return "DESCENT" if apogee_passed else "COAST"
 
     def pad_derivatives(tt):
@@ -171,7 +192,7 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
         dy[6] = -motor.mass_flow(tt)
         return dy
 
-    if cfg.launch.initial_speed_mps > 0.0:
+    if cfg.launch.initial_speed_mps > 0.0 and start is None:
         on_pad = False
         events["liftoff"] = _event("liftoff", 0.0, y)
 
@@ -194,16 +215,25 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
             # chute-free shadow copy of the coast until vz = 0.
             true_apogee = _coast_to_apogee(dyn, step, dt, t, y)
 
-    tick_k = 0
+    def deploy_main(mechanism: str):
+        nonlocal chute
+        chute = 2
+        events["main_deploy"] = _event("main_deploy", t, y)
+        main_info.update(main_t=t, main_altitude_m=float(y[2]), main_mechanism=mechanism)
+
+    main_info: dict = {}
+    tick_k = first_tick_k
     period = controller.period_s if controller is not None else math.inf
 
     def run_tick():
         nonlocal tick_k
         accel = np.zeros(3) if on_pad else dyn.derivatives(t, y, on_rail, chute)[3:6]
-        command = controller.tick(t, y.copy(), accel)
+        command = int(controller.tick(t, y.copy(), accel))
         tick_k += 1
-        if command and not chute and cfg.recovery.enabled:
+        if command & 1 and not chute and cfg.recovery.enabled:
             deploy("fc")
+        if command & 2 and main_alt is not None and chute != 2 and cfg.recovery.enabled:
+            deploy_main("fc")
 
     def tick_due() -> bool:
         return controller is not None and t >= tick_k * period - _T_EPS
@@ -212,6 +242,8 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
         run_tick()  # k = 0 at t = 0
 
     while t < cfg.sim.max_time_s:
+        if stop_time is not None and t >= stop_time - _T_EPS:
+            break
         # ---- step size: never step across a known discontinuity -------------
         h_nom = min(dt, dyn.max_stable_step(y, chute))
         h, t_new = h_nom, t + h_nom
@@ -308,20 +340,30 @@ def simulate(cfg: FlightConfig, motor=None, controller=None) -> FlightResult:
                 break
 
         t, y = t_new, y_new
+        if not ignited and t >= ign_t - _T_EPS:
+            ignited = True
+            events["ignition"] = _event("ignition", t, y)
         if not burned_out and t >= motor.burn_time - _T_EPS:
             burned_out = True
             events["burnout"] = _event("burnout", t, y)
         if t_deploy is not None and not chute and t >= t_deploy - _T_EPS:
             deploy("motor")
+        if t_backup is not None and not chute and t >= t_backup - _T_EPS:
+            deploy("timer")           # independent pre-set backup device
+        if (main_alt is not None and controller is None and chute != 2 and apogee_passed
+                and cfg.recovery.enabled and y[2] <= main_alt):
+            deploy_main("altitude")   # open loop: ideal altimeter fires the main
         if tick_due():
             run_tick()
         record(t, y)
 
     arr = np.array(ys)
+    deployment = _deployment_summary(cfg, events, true_apogee, deploy_mechanism)
+    if main_alt is not None:
+        deployment.update(main_info or {"main_t": None})
     return FlightResult(config=cfg, motor=motor, t=np.array(ts), position=arr[:, 0:3],
                         velocity=arr[:, 3:6], mass=arr[:, 6], phase=phases, events=events,
-                        landed=landed,
-                        deployment=_deployment_summary(cfg, events, true_apogee, deploy_mechanism))
+                        landed=landed, deployment=deployment, next_tick_k=tick_k, final_state=y.copy())
 
 
 def _coast_to_apogee(dyn: Dynamics, step, dt: float, t: float, y: np.ndarray,

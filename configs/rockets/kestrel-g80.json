@@ -1,0 +1,50 @@
+{
+  "id": "kestrel-g80",
+  "order": 3,
+  "category": "hobby-large",
+  "label": "Kestrel (large hobby, G80T-11)",
+  "description": "Generic large sport rocket: 41.6 mm (BT-60 size) body, 29 mm motor mount, cardboard and plywood construction, AeroTech G80T-11, 30 in chute on the 11 s motor ejection charge.",
+  "notes": {
+    "mass": "400 g airframe: ~1 m of 41.6 mm tube, plywood fins, payload bay, 30 in nylon chute and 29 mm mount (a 320 g first draft was light for this size and over-flew comparable G-motor sport rockets, which typically reach ~760-1070 m)",
+    "cd": "0.60: larger, smoother airframe than the small kits",
+    "recovery": "single 30 in chute: ~0.5 kg descends at ~5 m/s",
+    "rail": "1.5 m rod/rail for a G motor (higher rail-exit speed needed)",
+    "delay": "11 s (within the G80T's listed 6-14 s): true apogee comes 11.1 s after burnout; a 7 s delay opened the chute ~4 s early at ~42 m/s"
+  },
+  "expected": {
+    "apogee_m": [
+      450,
+      1100
+    ],
+    "max_mach": [
+      0.4,
+      0.8
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 0.4,
+      "body_diameter_m": 0.0416,
+      "cd": 0.6,
+      "drag_model": "constant"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/AeroTech_G80T.eng",
+      "ejection_delay_s": 11.0
+    },
+    "launch": {
+      "rail_length_m": 1.5
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.762,
+      "chute_cd": 0.8
+    },
+    "sim": {
+      "dt_s": 0.005
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "id": "swift-k940",
+  "order": 4,
+  "category": "high-power",
+  "label": "Swift (high-power, supersonic, K940)",
+  "description": "Generic minimum-diameter 54 mm high-power rocket (fiberglass, ogive nose) on a Cesaroni 1633K940: goes supersonic. Dual deploy: 24 in drogue at apogee, 60 in main at 300 m.",
+  "notes": {
+    "mass": "1.25 kg: fiberglass minimum-diameter airframe, avionics bay, recovery gear",
+    "cd": "0.42 subsonic with the Mach-dependent model (transonic rise to ~0.8)",
+    "dual_deploy": "from ~4 km a single main (5 m/s) would drift for ~13 min in any wind; a drogue (~22 m/s) brings it down fast and the main opens low for a soft landing",
+    "backup": "motor flown plugged: its longest delay (18 s) fires at 19.8 s, ~4.5 s BEFORE the 24.4 s true apogee, and would beat the FC. An independent pre-set timer at 26.5 s after ignition backs up the FC instead: true apogee under the standard dispersions is 24.5 +- 0.47 s (latest of 40 dispersed flights 25.3 s), so the timer fires after apogee even in the latest case.",
+    "rail": "2.4 m (8 ft) rail"
+  },
+  "expected": {
+    "apogee_m": [
+      3000,
+      5000
+    ],
+    "max_mach": [
+      1.1,
+      2.0
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 1.25,
+      "body_diameter_m": 0.056,
+      "cd": 0.42,
+      "drag_model": "mach"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/Cesaroni_K940.eng",
+      "ejection_delay_s": null
+    },
+    "launch": {
+      "rail_length_m": 2.4
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.61,
+      "chute_cd": 0.8,
+      "main_diameter_m": 1.52,
+      "main_cd": 0.8,
+      "main_deploy_altitude_m": 300.0,
+      "backup_timer_s": 26.5
+    },
+    "sim": {
+      "dt_s": 0.005,
+      "max_time_s": 900.0
+    }
+  }
+}

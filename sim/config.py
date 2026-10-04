@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -60,6 +61,17 @@ class RecoveryConfig:
     chute_cd: float = 0.8             # flat plastic hobby chute (typical 0.75-0.8)
     deploy_delay_s: float | None = None   # after burnout; None = use motor.ejection_delay_s
     near_apogee_window_s: float = 1.0     # |t_deploy - t_apogee| <= this counts as "near"
+    # Dual deploy (optional): the chute above becomes the DROGUE, deployed at
+    # apogee; the MAIN opens low, at main_deploy_altitude_m above the pad on the
+    # way down (open loop: ideal altimeter; SIL: commanded by the FC).
+    main_diameter_m: float | None = None
+    main_cd: float = 0.8
+    main_deploy_altitude_m: float | None = None
+    # Independent backup deployment by a pre-set timer (seconds after ignition),
+    # for high-power rockets whose longest motor delay would fire before apogee:
+    # the motor is flown plugged and this passive device backs up the flight
+    # computer instead of the ejection charge. None = no such device.
+    backup_timer_s: float | None = None
 
 
 @dataclass
@@ -118,6 +130,16 @@ class FlightConfig:
             raise ValueError("wind speed must be >= 0 and reference height > 0")
         if self.recovery.chute_diameter_m <= 0 or self.recovery.chute_cd <= 0:
             raise ValueError("chute diameter and Cd must be positive")
+        rec = self.recovery
+        if rec.backup_timer_s is not None and rec.backup_timer_s <= 0:
+            raise ValueError("recovery.backup_timer_s must be positive")
+        if (rec.main_diameter_m is None) != (rec.main_deploy_altitude_m is None):
+            raise ValueError("dual deploy needs both recovery.main_diameter_m and recovery.main_deploy_altitude_m")
+        if rec.main_diameter_m is not None:
+            if rec.main_diameter_m <= 0 or rec.main_cd <= 0 or rec.main_deploy_altitude_m <= 0:
+                raise ValueError("main chute diameter, Cd and deploy altitude must be positive")
+            if rec.main_diameter_m * math.sqrt(rec.main_cd) <= rec.chute_diameter_m * math.sqrt(rec.chute_cd):
+                raise ValueError("the main chute must have more drag area than the drogue")
         if self.atmosphere.model not in ("isa", "vacuum"):
             raise ValueError(f"unknown atmosphere model {self.atmosphere.model!r}")
 

@@ -1,0 +1,75 @@
+{
+  "id": "classic-c6",
+  "order": 2,
+  "category": "hobby-medium",
+  "label": "Classic (medium hobby, C6-5)",
+  "description": "The original default rocket, unchanged: BT-50 body (24.8 mm), 40 g, Estes C6-5, 12 in chute. Its flight config is configs/default.json verbatim (regression-pinned).",
+  "notes": {
+    "source": "configs/default.json; see README 'Default rocket and every default value'"
+  },
+  "expected": {
+    "apogee_m": [
+      280,
+      350
+    ],
+    "max_mach": [
+      0.2,
+      0.35
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 0.04,
+      "body_diameter_m": 0.0248,
+      "cd": 0.75,
+      "drag_model": "constant",
+      "mach_critical": 0.8,
+      "mach_peak": 1.1,
+      "cd_peak_factor": 1.9,
+      "mach_supersonic": 2.0,
+      "cd_supersonic_factor": 1.35
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/Estes_C6.eng",
+      "ejection_delay_s": 5.0,
+      "impulse_scale": 1.0,
+      "thrust_n": 0.0,
+      "burn_time_s": 0.0,
+      "total_mass_kg": 0.0,
+      "propellant_mass_kg": 0.0
+    },
+    "launch": {
+      "rail_length_m": 1.0,
+      "tilt_deg": 0.0,
+      "azimuth_deg": 0.0,
+      "initial_speed_mps": 0.0
+    },
+    "atmosphere": {
+      "model": "isa",
+      "sea_level_density_kg_m3": 1.225,
+      "launch_altitude_m": 0.0
+    },
+    "wind": {
+      "speed_mps": 2.0,
+      "toward_deg": 90.0,
+      "shear_exponent": 0.0,
+      "reference_height_m": 10.0
+    },
+    "recovery": {
+      "enabled": true,
+      "chute_diameter_m": 0.305,
+      "chute_cd": 0.8,
+      "deploy_delay_s": null,
+      "near_apogee_window_s": 1.0,
+      "main_diameter_m": null,
+      "main_cd": 0.8,
+      "main_deploy_altitude_m": null
+    },
+    "sim": {
+      "dt_s": 0.005,
+      "integrator": "rk4",
+      "max_time_s": 600.0
+    }
+  }
+}

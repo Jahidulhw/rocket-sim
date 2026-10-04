@@ -1,0 +1,78 @@
+{
+  "id": "argo-2stage",
+  "order": 5,
+  "category": "sounding-two-stage",
+  "label": "Argo (two-stage sounding rocket)",
+  "description": "Generic two-stage research rocket: 80 mm booster on a Cesaroni 1364K454, 56 mm sustainer on a Cesaroni 659J381. Passive staging: drag separation at booster burnout, sustainer ignites 1.0 s later. The booster recovers on its own chute (motor ejection charge); the sustainer flies dual deploy. Not modelled on any real vehicle.",
+  "notes": {
+    "booster": "1.1 kg airframe (80 mm tube, 4 fins, interstage), Cd 0.80 alone: open, blunt front end",
+    "sustainer": "1.0 kg (56 mm fiberglass, 38 mm mount, avionics), Cd 0.42 with Mach model",
+    "stack_cd": "0.55 with Mach model: the stack is longer and has the interstage transition",
+    "separation": "ballistic coefficient m/(Cd A) ~ 400 kg/m^2 (booster) vs ~1600 (sustainer): the booster decelerates ~4x harder and falls away without a separation charge",
+    "ignition_delay": "1.0 s: long enough for clean separation, short enough not to bleed speed",
+    "booster_recovery": "36 in chute on the K454's 10 s ejection delay (near booster apogee)",
+    "backup": "sustainer motor flown plugged: the J381's longest delay (15 s) fires at 21.0 s, ~4 s BEFORE the 25.3 s true apogee. Independent timer at 27.5 s after first ignition: true apogee under dispersions is 25.4 +- 0.43 s (latest of 40: 26.2 s).",
+    "sustainer_recovery": "dual deploy: 24 in drogue at apogee, 48 in main at 300 m",
+    "expected_band": "reported K-to-J two-stage high-power flights reach roughly 12-20 kft (3.7-6 km). The first hand estimate (4-12 km) came from ideal delta-v and ignored supersonic drag, which the Mach model shows dominates (a lighter sustainer flies LOWER); revised to this documented range."
+  },
+  "expected": {
+    "apogee_m": [
+      3000,
+      8000
+    ],
+    "max_mach": [
+      1.0,
+      2.5
+    ]
+  },
+  "flight": {
+    "rocket": {
+      "dry_mass_kg": 1.0,
+      "body_diameter_m": 0.056,
+      "cd": 0.42,
+      "drag_model": "mach"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/Cesaroni_J381.eng",
+      "ejection_delay_s": null
+    },
+    "launch": {
+      "rail_length_m": 3.0
+    },
+    "wind": {
+      "speed_mps": 2.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.61,
+      "chute_cd": 0.8,
+      "main_diameter_m": 1.22,
+      "main_cd": 0.8,
+      "main_deploy_altitude_m": 300.0,
+      "backup_timer_s": 27.5
+    },
+    "sim": {
+      "dt_s": 0.005,
+      "max_time_s": 1200.0
+    }
+  },
+  "booster": {
+    "rocket": {
+      "dry_mass_kg": 1.1,
+      "body_diameter_m": 0.08,
+      "cd": 0.8,
+      "drag_model": "mach"
+    },
+    "motor": {
+      "kind": "eng",
+      "eng_file": "data/motors/Cesaroni_K454.eng",
+      "ejection_delay_s": 10.0
+    },
+    "recovery": {
+      "chute_diameter_m": 0.914,
+      "chute_cd": 0.8
+    },
+    "sustainer_ignition_delay_s": 1.0,
+    "stack_cd": 0.55
+  }
+}
