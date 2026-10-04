@@ -22,7 +22,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 class RocketConfig:
     dry_mass_kg: float = 0.040        # airframe + recovery, WITHOUT motor
     body_diameter_m: float = 0.0248   # sets the drag reference area
-    cd: float = 0.75                  # body drag coefficient (power-on and coast)
+    cd: float = 0.75                  # body drag coefficient (power-on and coast); subsonic value if "mach"
+    drag_model: str = "constant"      # "constant": Cd = cd always; "mach": Cd(M) curve, see sim/aero.py
+    mach_critical: float = 0.8        # "mach" only: end of the subsonic plateau
+    mach_peak: float = 1.1            # "mach" only: Mach number of peak drag
+    cd_peak_factor: float = 1.9       # "mach" only: peak Cd / cd
+    mach_supersonic: float = 2.0      # "mach" only: end of the supersonic decline
+    cd_supersonic_factor: float = 1.35  # "mach" only: Cd / cd beyond mach_supersonic
 
 
 @dataclass
@@ -102,6 +108,10 @@ class FlightConfig:
             raise ValueError("launch.rail_length_m must be >= 0")
         if self.rocket.dry_mass_kg <= 0:
             raise ValueError("rocket.dry_mass_kg must be positive")
+        if self.rocket.drag_model not in ("constant", "mach"):
+            raise ValueError(f"unknown rocket.drag_model {self.rocket.drag_model!r}; expected 'constant' or 'mach'")
+        if self.rocket.drag_model == "mach":
+            mach_drag_params(self.rocket).validate()
         if self.motor.kind not in ("constant", "eng"):
             raise ValueError(f"unknown motor kind {self.motor.kind!r}")
         if self.wind.speed_mps < 0 or self.wind.reference_height_m <= 0:
@@ -134,6 +144,12 @@ class FlightConfig:
 
     def copy(self) -> "FlightConfig":
         return copy.deepcopy(self)
+
+
+def mach_drag_params(r: RocketConfig):
+    """The rocket's Cd(M) shape as a sim.aero.MachDrag."""
+    from .aero import MachDrag
+    return MachDrag(r.mach_critical, r.mach_peak, r.cd_peak_factor, r.mach_supersonic, r.cd_supersonic_factor)
 
 
 def _build(sub_cls, d: dict, section: str):

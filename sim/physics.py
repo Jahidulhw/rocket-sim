@@ -17,8 +17,9 @@ import math
 
 import numpy as np
 
-from .atmosphere import density
-from .config import FlightConfig, WindConfig
+from .aero import drag_coefficient
+from .atmosphere import density, speed_of_sound
+from .config import FlightConfig, WindConfig, mach_drag_params
 
 G0 = 9.81                                   # m/s^2, standard gravity (constant, flat Earth)
 GRAVITY = np.array([0.0, 0.0, -G0])
@@ -70,6 +71,8 @@ class Dynamics:
         self.chute_area = math.pi * cfg.recovery.chute_diameter_m ** 2 / 4.0
         self.wind = cfg.wind
         self.calm = cfg.wind.speed_mps == 0.0
+        # None = constant body Cd (the original model, used by the default rocket).
+        self.mach_drag = mach_drag_params(cfg.rocket) if cfg.rocket.drag_model == "mach" else None
 
     def air_density(self, z: float) -> float:
         return density(self.h0 + z, self.rho0) if self.has_air else 0.0
@@ -87,12 +90,24 @@ class Dynamics:
         if self.has_air:
             # Wind enters ONLY here, through the air-relative velocity.
             v_rel = v if self.calm else v - wind_velocity(y[2], self.wind)
-            if chute:  # chute replaces body drag once deployed
+            if chute:  # chute replaces body drag once deployed (always subsonic: constant Cd)
                 cd, area = self.cfg.recovery.chute_cd, self.chute_area
             else:
-                cd, area = self.cfg.rocket.cd, self.body_area
+                cd, area = self.body_cd(y[2], v_rel), self.body_area
             force += drag_force(v_rel, self.air_density(y[2]), cd, area)
         return force
+
+    def body_cd(self, z: float, v_rel: np.ndarray) -> float:
+        """Body drag coefficient for air-relative velocity v_rel at height z."""
+        if self.mach_drag is None:
+            return self.cfg.rocket.cd
+        mach = math.sqrt(v_rel @ v_rel) / speed_of_sound(self.h0 + z)
+        return drag_coefficient(self.cfg.rocket.cd, mach, self.mach_drag)
+
+    def drag_cd(self, z: float, v: np.ndarray) -> float:
+        """Body Cd for ground-relative velocity v at height z (wind removed)."""
+        v = np.asarray(v, dtype=float)
+        return self.body_cd(z, v if self.calm else v - wind_velocity(z, self.wind))
 
     def derivatives(self, t: float, y: np.ndarray, on_rail: bool, chute: bool = False) -> np.ndarray:
         m = y[6]

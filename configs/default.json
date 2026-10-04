@@ -2,7 +2,13 @@
   "rocket": {
     "dry_mass_kg": 0.04,
     "body_diameter_m": 0.0248,
-    "cd": 0.75
+    "cd": 0.75,
+    "drag_model": "constant",
+    "mach_critical": 0.8,
+    "mach_peak": 1.1,
+    "cd_peak_factor": 1.9,
+    "mach_supersonic": 2.0,
+    "cd_supersonic_factor": 1.35
   },
   "motor": {
     "kind": "eng",
