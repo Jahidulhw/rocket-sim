@@ -105,8 +105,9 @@ run where the FC never commands deployment fails.**
 
 ### REQ-005: FC hang tolerated
 **If the FC stops responding, the watchdog shall detect it and the parachute
-shall still deploy, by the motor's independent ejection charge if the FC had
-not already deployed.**
+shall still deploy, by an independent backup if the FC had not already
+deployed: the motor's ejection charge, or, on rockets flying plugged motors,
+a pre-set backup timer device.**
 
 * *Rationale.* Software can hang. Real hobby rockets keep the motor ejection
   charge as an independent backup to electronic deployment. With a C6-7 it
@@ -119,6 +120,12 @@ not already deployed.**
   * Monte Carlo hang runs.
   * The hang is genuine: the FC process blocks, via its test-only flag
     `--inject-hang-at`.
+* *Fleet note.* On the dual-deploy rockets (Swift, Argo), a hung FC also
+  means no main chute. The backup device deploys only the drogue, and the
+  rocket lands on the drogue at about 20 m/s: the chute is deployed, but the
+  landing is hard. Real high-power flyers solve this with a second,
+  independent altimeter on the main channel; that is future work here (see
+  below).
 
 ### REQ-006: Determinism
 **Identical input to the FC shall produce identical output.**
@@ -176,11 +183,64 @@ detection, never from its backup timer.**
   * Not required after a barometer failure: the FC then has no altitude
     source, and it skips landing detection by design.
 
+### REQ-011: No deployment before the final burnout (multi-burn rockets)
+**On a staged rocket the FC shall never command any deployment, drogue or
+main, from lift-off until the final motor burnout: not during either boost,
+and not in the inter-stage gap, under any single fault.**
+
+* *Rationale.* The inter-stage gap is a coast phase. An FC built for one burn
+  could treat it as the coast to apogee, or treat the sustainer's thrust step
+  as a sensor outlier. A deployment then would open the chute in the
+  sustainer's exhaust at hundreds of m/s.
+* *Design.*
+  * The FC is configured before flight with the number of burns (`burns`).
+    It never commands staging.
+  * While burns remain, apogee detection, deployment and innovation gating
+    are locked out.
+  * Any detected thrust in coast returns the FC to BOOST.
+* *Verification.*
+  * The per-run check on every Argo Monte Carlo run, nominal and faulted.
+  * `test_two_stage_never_deploys_before_final_burnout_under_faults[*]`
+    (spikes, a blackout across separation, a dead accelerometer, a stuck
+    barometer in the gap).
+  * C++: `TwoBurnSequenceNoDeployBeforeFinalBurnout_REQ011_REQ012`,
+    `NoDeployInTheGapEvenWithAnApogeeLikeBaro_REQ011`.
+
+### REQ-012: Staging is never mistaken for apogee or landing
+**On a staged rocket the FC shall report no APOGEE, DESCENT or LANDED state
+before the final motor burnout.**
+
+* *Rationale.* The interface of REQ-011. A state machine that "sees" apogee
+  at booster burnout has already lost track of the flight, even if a lockout
+  stops the pyro channel firing.
+* *Verification.*
+  * The per-run check on every Argo run.
+  * `test_two_stage_staging_is_handled_explicitly`.
+  * C++ `TwoBurnSequence*_REQ012`.
+
+### REQ-013: Main chute at its altitude (dual deploy)
+**On a nominal dual-deploy flight the FC shall command the main chute after
+the drogue, during descent, within 25 m of the configured main deploy
+altitude.**
+
+* *Rationale.*
+  * Deploying the main high (at apogee) multiplies drift.
+  * Deploying it too low leaves too little time to inflate and slow down.
+  * 25 m at about 20 m/s on the drogue is just over 1 s of descent: well
+    inside the margin a 300 m main altitude leaves.
+* *Verification.*
+  * Monte Carlo (nominal Swift and Argo runs).
+  * `test_dual_deploy_main_commanded_near_its_altitude[*]`.
+  * C++ `MainCommandedBelowItsAltitudeAfterDrogue_REQ013`,
+    `FailedBaroCommandsMainWithDrogue_REQ013` (the designed fallback: no
+    altitude, so the main goes with the drogue).
+
 ---
 
 ## Why these requirements, and what's missing
 
-* REQ-001 to REQ-006 come from the project brief.
+* REQ-001 to REQ-006 come from the SIL project brief. REQ-011 to REQ-013
+  were added for the fleet (two burns, dual deploy).
 * I added REQ-007 to REQ-010 because each closes a gap the first six leave
   open:
   * bad replies (REQ-007) and bad inputs (REQ-008) are the integration
@@ -192,6 +252,10 @@ detection, never from its backup timer.**
   * power loss and brown-out reboot in flight;
   * multiple simultaneous faults;
   * pyro-channel continuity checks;
-  * a pre-launch self-test (accelerometer reads 1 g, barometer steady).
+  * a pre-launch self-test (accelerometer reads 1 g, barometer steady);
+  * a redundant altimeter for the main channel of dual-deploy rockets
+    (REQ-005 fleet note);
+  * pressure-port errors near Mach 1 (the barometer model has no transonic
+    pressure disturbance, so no Mach lockout is modelled).
 
   The walkthrough discusses each one as future work.

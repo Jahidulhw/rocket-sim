@@ -32,6 +32,7 @@ from sim.requirements import REQUIREMENTS  # noqa: E402
 from sim.sil import BUILD_HINT, find_fc_executable  # noqa: E402
 
 RESULTS = REPO_ROOT / "out" / "sil_mc" / "results.json"
+FLEET = REPO_ROOT / "out" / "sil_fleet" / "summary.json"
 VERIFY_DIR = REPO_ROOT / "out" / "verify"
 REPORT = REPO_ROOT / "docs" / "verification_report.md"
 PER_RUN = ("REQ-001", "REQ-003", "REQ-004", "REQ-005", "REQ-009", "REQ-010")
@@ -245,6 +246,8 @@ def build_report(res: dict, trace: dict) -> str:
           f"{', **FAILS ' + ', '.join(fails) + '**' if fails else ''}.")
         w(f"  `{replay_cmd(r)}`")
     w("")
+    fleet_section(L)
+
     wr = S.get("watchdog_retries", [])
     w("## 6. Harness notes\n")
     w("* The watchdog uses wall-clock time, the only wall-clock element in the loop. A first campaign with "
@@ -263,6 +266,54 @@ def build_report(res: dict, trace: dict) -> str:
       f"probability below about 3/N at 95 % confidence (the \"rule of three\"): for N = {cfg['n_runs']}, "
       f"below {3 / cfg['n_runs']:.1%}.")
     return "\n".join(L) + "\n"
+
+
+def fleet_section(L: list) -> None:
+    """Fleet-wide verification: pass rate per requirement per rocket (Kalman FC,
+    each rocket with its own FC configuration and sensor model)."""
+    w = L.append
+    w("## 5b. Fleet-wide verification (every preset)\n")
+    if not FLEET.is_file():
+        w("*Not run: `scripts/run_sil_fleet.py` writes `out/sil_fleet/summary.json`.*\n")
+        return
+    F = json.loads(FLEET.read_text(encoding="utf-8"))
+    presets = F["presets"]
+    rids = sorted({rid for p in presets.values() for rid in p["requirements"]})
+    w(f"{F['n_runs']} seeded SIL flights per rocket (60 % with one random single fault; fault times scaled "
+      f"to each rocket's apogee time), plus {F['pad_sits']} pad sits of 60 s per rocket and worst-case "
+      "determinism replays. Every rocket uses its own FC configuration and sensor model "
+      f"(`configs/rockets/*.json` → `sil`). Campaign seed {F['seed']}.\n")
+    w("Each cell is passes/applicable runs. \"–\" means the requirement does not apply to that rocket "
+      "(for example the two-burn requirements on a single-stage rocket).\n")
+    w("| Rocket | Motor(s) | " + " | ".join(rids) + " | REQ-002 pad sits | REQ-006 replays |")
+    w("|---|---|" + "---:|" * (len(rids) + 2))
+    all_ok = True
+    for pid, p in presets.items():
+        cells = []
+        for rid in rids:
+            d = p["requirements"].get(rid, {"applicable": 0, "pass": 0, "fail": 0})
+            if d["applicable"] == 0:
+                cells.append("–")
+            else:
+                ok = d["fail"] == 0
+                all_ok &= ok
+                cells.append(f"{'' if ok else '❌ '}{d['pass']}/{d['applicable']}")
+        ps, dd = p["pad_sits"], p["determinism"]
+        all_ok &= ps["false_launches"] == 0 and dd["identical"] == dd["replayed"]
+        w(f"| {p['label']} | {p['motors']} | " + " | ".join(cells)
+          + f" | {ps['n'] - ps['false_launches']}/{ps['n']} | {dd['identical']}/{dd['replayed']} |")
+    w("")
+    verdict = "every applicable requirement passed on every rocket" if all_ok else "FAILURES above (marked ❌)"
+    w(f"**Fleet verdict: {verdict}.**\n")
+    w("Nominal deploy timing (Kalman FC; deploy command − true apogee):\n")
+    w("| Rocket | Nominal runs | Mean | \\|dt\\| p95 | Max \\|dt\\| | Timer deploys |")
+    w("|---|---:|---:|---:|---:|---:|")
+    for pid, p in presets.items():
+        t = p["timing"].get("nominal")
+        if t:
+            w(f"| {p['label']} | {t['n']} | {t['dt_mean_s']:+.3f} s | {t['dt_abs_p95_s']:.3f} s | "
+              f"{t['dt_max_abs_s']:.3f} s | {t['timer_deploys']} |")
+    w("")
 
 
 def main(argv=None) -> int:

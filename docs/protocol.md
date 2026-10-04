@@ -6,10 +6,15 @@ line per message, with lines ending in `\n`. The FC ignores a single trailing
 `\r`, because Windows pipes may deliver CRLF. The FC writes diagnostics only to
 **stderr**, so stdout carries nothing but protocol.
 
-Health events go to stderr as `fc: t=<t> HEALTH ...` lines, for example a sensor
-declared stuck, or the estimator declared inconsistent. The simulator
-collects them in `SilResult.fc_health_events`. They are deliberately **not**
-part of the reply format, which stays fixed.
+The FC writes diagnostic events to stderr as `fc: t=<t> ...` lines. They are
+deliberately **not** part of the reply format, which stays fixed:
+
+* `HEALTH ...`: a sensor declared stuck, or the estimator declared
+  inconsistent. The simulator collects these in `SilResult.fc_health_events`.
+* `STAGING ...`: a burnout with more burns expected, an unexpected burn in
+  coast, or an ignition timeout.
+* `MAIN ...`: the main chute commanded together with the drogue because the
+  barometer has failed.
 
 Implementations: [`fc/src/protocol.cpp`](../fc/src/protocol.cpp) (FC side) and
 [`sim/protocol.py`](../sim/protocol.py) (sim side), driven by
@@ -46,10 +51,17 @@ Implementations: [`fc/src/protocol.cpp`](../fc/src/protocol.cpp) (FC side) and
 * `state`: one of `PAD BOOST COAST APOGEE DESCENT LANDED`.
 * `est_alt`, `est_vel`: the FC's altitude (m) and vertical velocity (m/s)
   estimates, written `%.3f`.
-* `deploy`: `1` = deployment commanded, `0` = not commanded. The flag is
-  **latched**: once the FC sends `1`, every later reply also carries `1`. If one
-  reply is lost or garbled, the next one still carries the command, and the
-  command can never be withdrawn. In PAD and BOOST it is always `0` (the boost
+* `deploy`: a **bitmask** of the commanded parachute events:
+  * `1` = the primary chute (the drogue, on a dual-deploy rocket);
+  * `2` = the main chute (dual deploy only, commanded at the main altitude
+    during descent);
+  * `3` = both.
+
+  A single-deploy rocket only ever sends `0` or `1`, exactly as before the
+  fleet extension. Each bit is **latched**: once sent, every later reply
+  carries it. If one reply is lost or garbled, the next one still carries the
+  command, and a command can never be withdrawn. In PAD and BOOST, and while a
+  staged rocket waits for its next burn, the field is always `0` (the
   lockout).
 * **Why the FC deployed** can be read from `state` in the first reply with
   `deploy = 1`:
@@ -61,14 +73,22 @@ Implementations: [`fc/src/protocol.cpp`](../fc/src/protocol.cpp) (FC side) and
   traceable.
 
 FC command line:
-`flight_computer [--mode kalman|baseline|stub] [--param key=value] [--inject-hang-at <t>]`.
+`flight_computer [--mode kalman|baseline|stub] [--param key=value]... [--inject-hang-at <t>] [--trace]`.
 
 * `kalman` is the default. `baseline` is the raw-barometer detector, kept for
   comparison.
 * `stub` is a plumbing test double: it echoes the barometer, always reports
   `PAD` and never deploys.
-* `--param` overrides a numeric tuning value, for tuning and mistuning studies
-  (see `fc/src/config.cpp`). Unknown keys are rejected.
+* `--param` overrides any numeric configuration value by name: the full table
+  is in `fc/src/config.cpp`. Unknown keys and out-of-range values are rejected,
+  and the FC exits with code 2.
+  * Each fleet preset passes its own values, from `configs/rockets/*.json`
+    `sil.fc`, plus filter noise values derived from its sensor model.
+  * There is deliberately no key that commands staging: the FC only knows how
+    many burns to expect.
+* `--trace` (debug) prints the filter's internals for every frame to stderr:
+  state, P_aa, the gate, and each accelerometer innovation with accept/reject.
+  It is how the fleet's tail-off and transonic-coast bugs were diagnosed.
 
 The FC's `E` reasons are `line_too_long`, `empty_line`, `empty_field`,
 `bad_field_count`, `unknown_tag`, `bad_number` and `non_increasing_time`.
