@@ -176,7 +176,7 @@ class SilConfig:
 # baro/accel are the values DELIVERED to the FC (after fault injection);
 # "faults" lists the fault labels active at that tick (";"-separated).
 LOG_FIELDS = ("t", "z_true", "vz_true", "az_true", "baro", "accel", "sent", "reply_ok",
-              "fc_state", "est_alt", "est_vel", "fc_deploy", "error", "faults")
+              "fc_state", "est_alt", "est_vel", "fc_deploy", "fc_main", "error", "faults")
 
 
 @dataclass
@@ -191,6 +191,10 @@ class SilResult:
     fc_returncode: int | None
     fc_stderr: list
     faults: tuple = ()
+    fc_main_t: float | None = None     # first tick the FC commanded the main chute (dual deploy)
+    booster: FlightResult | None = None  # spent booster of a two-stage rocket
+    preset_id: str | None = None
+    main_altitude_m: float | None = None  # configured main deploy altitude (dual deploy)
 
     @property
     def fc_health_events(self) -> list:
@@ -243,24 +247,26 @@ class SilLink:
         self.failure_reason: str | None = None
         self.protocol_errors = 0
         self.fc_deploy_t: float | None = None
+        self.fc_main_t: float | None = None
         self.log = {k: [] for k in LOG_FIELDS}
 
     # simulate() interface ------------------------------------------------
-    def tick(self, t: float, y: np.ndarray, accel: np.ndarray) -> bool:
+    def tick(self, t: float, y: np.ndarray, accel: np.ndarray) -> int:
         self.in_flight_ticks += 1
         return self.exchange(t, float(y[2]), float(y[5]), float(accel[2]))
 
     # ---------------------------------------------------------------------
-    def exchange(self, t: float, z: float, vz: float, az: float) -> bool:
-        """One tick. Returns the FC's deploy command (False on any failure)."""
+    def exchange(self, t: float, z: float, vz: float, az: float) -> int:
+        """One tick. Returns the FC's deploy command bitmask (0 on any failure)."""
         baro, acc = self.sensors.sample(z, az)   # always drawn: keeps the noise stream aligned
         send, active = True, []
         if self.injector is not None:
             send, baro, acc, active = self.injector.apply(t, baro, acc)
         row = {"t": t, "z_true": z, "vz_true": vz, "az_true": az, "baro": baro, "accel": acc,
                "sent": False, "reply_ok": False, "fc_state": "", "est_alt": np.nan,
-               "est_vel": np.nan, "fc_deploy": False, "error": "", "faults": ";".join(active)}
-        command = False
+               "est_vel": np.nan, "fc_deploy": False, "fc_main": False, "error": "",
+               "faults": ";".join(active)}
+        command = 0
         if self.failed:
             row["error"] = "fc_failed"
         elif not send:
@@ -280,10 +286,12 @@ class SilLink:
                 row["error"] = f"protocol: {exc}"
             else:
                 row.update(reply_ok=True, fc_state=reply.state, est_alt=reply.est_alt_m,
-                           est_vel=reply.est_vel_mps, fc_deploy=reply.deploy)
-                command = reply.deploy
-                if command and self.fc_deploy_t is None:
+                           est_vel=reply.est_vel_mps, fc_deploy=reply.deploy, fc_main=reply.deploy_main)
+                command = reply.command
+                if reply.deploy and self.fc_deploy_t is None:
                     self.fc_deploy_t = t
+                if reply.deploy_main and self.fc_main_t is None:
+                    self.fc_main_t = t
         for k, v in row.items():
             self.log[k].append(v)
         return command
@@ -294,7 +302,32 @@ class SilLink:
 
 def run_sil(cfg: FlightConfig, sil: SilConfig | None = None) -> SilResult:
     """Fly one closed-loop SIL flight (pad sit, flight, post-landing)."""
+    return _run(lambda link: (simulate(cfg, controller=link), None), sil or SilConfig())
+
+
+def run_sil_preset(preset, sil: SilConfig | None = None, flight: FlightConfig | None = None,
+                   booster=None) -> SilResult:
+    """Fly a fleet preset in closed loop with its own FC configuration and
+    sensor model (preset.sil); two-stage presets fly both stages (the FC rides
+    the sustainer). `sil` overrides seed/faults/mode etc.; `flight` replaces
+    the preset's SIL flight config (e.g. dispersed for Monte Carlo)."""
+    from .fleet import fly_preset, sil_flight_config_for, sil_settings
+    base = sil_settings(preset)
     sil = sil or SilConfig()
+    sil = SilConfig(**{**sil.__dict__, "sensors": base["sensors"] if sil.sensors == SensorConfig() else sil.sensors,
+                       "fc_args": tuple(base["fc_args"]) + tuple(sil.fc_args)})
+    cfg = flight or sil_flight_config_for(preset)
+
+    def fly(link):
+        r = fly_preset(preset, controller=link, flight=cfg, booster=booster)
+        return r.flight, r.booster
+    res = _run(fly, sil)
+    res.preset_id = preset.id
+    res.main_altitude_m = cfg.recovery.main_deploy_altitude_m if cfg.recovery.main_diameter_m is not None else None
+    return res
+
+
+def _run(fly, sil: SilConfig) -> SilResult:
     sensors = SensorSuite(sil.sensors, np.random.default_rng(sil.seed))
     # Separate stream for fault randomness, so faults never shift sensor noise.
     injector = FaultInjector(sil.faults, np.random.default_rng([sil.seed, 0xFA17])) if sil.faults else None
@@ -309,7 +342,7 @@ def run_sil(cfg: FlightConfig, sil: SilConfig | None = None) -> SilResult:
         n_pre = round(sil.pre_launch_s / period)
         for k in range(-n_pre, 0):
             link.exchange(k * period, 0.0, 0.0, 0.0)
-        flight = simulate(cfg, controller=link)
+        flight, booster = fly(link)
         if flight.landed:
             k0 = link.in_flight_ticks
             for k in range(k0, k0 + round(sil.post_landing_s / period)):
@@ -319,7 +352,7 @@ def run_sil(cfg: FlightConfig, sil: SilConfig | None = None) -> SilResult:
                      failure_t=link.failure_t, failure_reason=link.failure_reason,
                      protocol_errors=link.protocol_errors, fc_deploy_t=link.fc_deploy_t,
                      fc_returncode=fc.returncode, fc_stderr=list(fc.stderr_lines),
-                     faults=tuple(sil.faults))
+                     faults=tuple(sil.faults), fc_main_t=link.fc_main_t, booster=booster)
 
 
 def run_pad_sit(duration_s: float = 60.0, sil: SilConfig | None = None) -> dict:

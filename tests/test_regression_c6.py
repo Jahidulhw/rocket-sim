@@ -81,7 +81,11 @@ SIL_CASES = {
 def test_default_c6_sil_results_unchanged(fc_exe, name):
     ref = BASE["sil"][name]
     res = run_sil(sil_flight_config(_cfg()), SilConfig(fc_exe=str(fc_exe), **SIL_CASES[name]))
-    assert {rid: v.status for rid, v in evaluate(res).items()} == ref["verdicts"]
+    verdicts = {rid: v.status for rid, v in evaluate(res).items()}
+    # The requirements that existed when the baseline was recorded: unchanged.
+    assert {rid: verdicts[rid] for rid in ref["verdicts"]} == ref["verdicts"]
+    # Requirements added later (two-burn, dual deploy) do not apply to this rocket.
+    assert all(verdicts[rid] == "n/a" for rid in set(verdicts) - set(ref["verdicts"]))
     assert res.fc_deploy_reason == ref["reason"] and res.deploy_mechanism == ref["mechanism"]
     assert [h.split("HEALTH ", 1)[1] for h in res.fc_health_events] == ref["health"]
     assert res.fc_deploy_t == pytest.approx(ref["fc_deploy_t"], abs=TICK)

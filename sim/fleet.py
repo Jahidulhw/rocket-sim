@@ -34,7 +34,12 @@ from .staging import BoosterSpec, StagedResult, simulate_staged
 
 PRESET_DIR = REPO_ROOT / "configs" / "rockets"
 CATEGORIES = ("hobby-small", "hobby-medium", "hobby-large", "high-power", "sounding-two-stage")
-_TOP_KEYS = {"id", "label", "category", "order", "description", "notes", "expected", "flight", "booster", "geometry"}
+_TOP_KEYS = {"id", "label", "category", "order", "description", "notes", "expected", "flight", "booster",
+             "geometry", "sil"}
+_SIL_KEYS = {"fc", "sensors", "flight_overrides", "notes"}
+# Derived from the preset's sensor model, never set by hand (R comes from the sensors).
+_DERIVED_FC_KEYS = {"kf.baro_sigma_m", "kf.baro_quant_m", "kf.accel_sigma_mps2", "accel_full_scale_mps2",
+                    "accel_ref_gate_mps2"}
 _BOOSTER_KEYS = {"rocket", "motor", "recovery", "sustainer_ignition_delay_s", "stack_cd"}
 
 
@@ -51,6 +56,7 @@ class Preset:
     expected: dict = field(default_factory=dict)
     notes: dict = field(default_factory=dict)
     path: Path | None = None
+    sil: dict = field(default_factory=dict)
 
     @property
     def two_stage(self) -> bool:
@@ -100,12 +106,58 @@ def preset_from_dict(d: dict, path: Path | None = None) -> Preset:
         raise ValueError(f"{where}: missing required key 'geometry' (needed for the stability check)")
     preset = Preset(id=d["id"], label=d["label"], category=d["category"], order=int(d.get("order", 99)),
                     description=d["description"], flight=flight, booster=booster, geometry=d["geometry"],
-                    expected=d.get("expected", {}), notes=d.get("notes", {}), path=path)
+                    expected=d.get("expected", {}), notes=d.get("notes", {}), path=path, sil=d.get("sil") or {})
     try:
         geometries(preset)          # validates the geometry and its agreement with the flight config
-    except ValueError as exc:
+        sil_settings(preset)        # validates the SIL section
+        sil_flight_config_for(preset)
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"{where}: {exc}") from exc
     return preset
+
+
+def sil_settings(preset: Preset) -> dict:
+    """The preset's SIL sensor model and FC arguments. The filter's measurement
+    noise, the accelerometer full scale and the reference gate are DERIVED from
+    the sensor model (R comes from the sensors), not configured."""
+    from .sensors import SensorConfig
+    sil = preset.sil or {}
+    unknown = set(sil) - _SIL_KEYS
+    if unknown:
+        raise ValueError(f"sil: unknown keys {sorted(unknown)}")
+    sensors = SensorConfig(**sil.get("sensors", {}))
+    sensors.validate()
+    fc = dict(sil.get("fc", {}))
+    clash = set(fc) & _DERIVED_FC_KEYS
+    if clash:
+        raise ValueError(f"sil.fc: {sorted(clash)} are derived from sil.sensors and must not be set")
+    for k, v in fc.items():
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise ValueError(f"sil.fc.{k} must be a number")
+    derived = {"kf.baro_sigma_m": sensors.baro_noise_sigma_m, "kf.baro_quant_m": sensors.baro_quant_m,
+               "kf.accel_sigma_mps2": sensors.accel_noise_sigma_mps2,
+               "accel_full_scale_mps2": sensors.accel_range_mps2,
+               "accel_ref_gate_mps2": 4.0 * sensors.accel_noise_sigma_mps2}
+    default = SensorConfig()
+    args = []
+    for k, v in sorted(derived.items()):     # only pass what differs from the FC's built-in defaults
+        base = {"kf.baro_sigma_m": default.baro_noise_sigma_m, "kf.baro_quant_m": default.baro_quant_m,
+                "kf.accel_sigma_mps2": default.accel_noise_sigma_mps2,
+                "accel_full_scale_mps2": default.accel_range_mps2,
+                "accel_ref_gate_mps2": 4.0 * default.accel_noise_sigma_mps2}[k]
+        if v != base:
+            args += ["--param", f"{k}={v:.10g}"]
+    for k, v in fc.items():
+        args += ["--param", f"{k}={v:.10g}"]
+    return {"sensors": sensors, "fc_args": args, "fc": fc}
+
+
+def sil_flight_config_for(preset: Preset) -> FlightConfig:
+    """Flight config used under SIL (e.g. a longer motor delay so the ejection
+    charge is a true backup that fires after the FC's apogee event)."""
+    from .config import apply_overrides
+    over = (preset.sil or {}).get("flight_overrides", {})
+    return apply_overrides(preset.flight, over) if over else preset.flight
 
 
 def _agree(geom: Geometry, rocket, label: str) -> None:
@@ -176,10 +228,12 @@ def preset_motors(preset: Preset) -> str:
     return sust if preset.booster is None else f"{motor_designation(preset.booster.flight.motor)} + {sust}"
 
 
-def fly_preset(preset: Preset, controller=None, flight: FlightConfig | None = None) -> PresetFlight:
-    """Fly a preset (optionally with a modified flight config, e.g. a coarser dt)."""
+def fly_preset(preset: Preset, controller=None, flight: FlightConfig | None = None,
+               booster: BoosterSpec | None = None) -> PresetFlight:
+    """Fly a preset (optionally with a modified flight config, e.g. a coarser
+    dt or Monte Carlo dispersions; `booster` likewise replaces the booster)."""
     cfg = flight or preset.flight
     if preset.booster is None:
         return PresetFlight(preset, simulate(cfg, controller=controller))
-    staged = simulate_staged(cfg, preset.booster, controller=controller)
+    staged = simulate_staged(cfg, booster or preset.booster, controller=controller)
     return PresetFlight(preset, staged.flight, staged.booster, staged)

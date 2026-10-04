@@ -90,5 +90,24 @@
         "position_m": 0.28
       }
     ]
+  },
+  "sil": {
+    "fc": {
+      "backup_timer_s": 14.1,
+      "max_boost_s": 2.7,
+      "min_deploy_after_launch_s": 2.3,
+      "powered_jerk_psd": 10000.0
+    },
+    "flight_overrides": {
+      "motor.ejection_delay_s": 13.0
+    },
+    "notes": {
+      "backup_timer_s": "nominal true apogee + max(1.0 s, 4 sigma of the apogee time under the standard dispersions), from lift-off; the C6 value 8.5 s follows the same rule (7.42 + 1.08)",
+      "max_boost_s": "longest burn x 1.6 (C6: 1.86 s -> 3.0 s): burnout fallback for a stuck accelerometer",
+      "min_deploy_after_launch_s": "final burnout x 1.35 (C6: 1.86 s -> 2.5 s): deploy inhibit",
+      "basis": "G80T burn 1.70 s; true apogee 13.09 s (sigma 0.24 s); peak ~21 g",
+      "motor": "SIL flies a 13 s delay (listed range 6-14 s) so the charge fires at 14.7 s, after the FC's apogee event and its 14.1 s backup timer",
+      "powered_jerk_psd": "1e4 m^2/s^5 under thrust and for 0.5 s after each detected burnout (tail-off): the coast q (10) cannot follow thrust-curve and tail-off jerk on this rocket, the gate then rejected genuine samples and nominal flights went 'inconsistent' (found by the fleet SIL runs; see fc/include/fc/config.hpp). 1e4 sits in the measured plateau: apogee detection +0.04-0.05 s on every preset"
+    }
   }
 }

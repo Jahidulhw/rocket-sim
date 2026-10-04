@@ -1,7 +1,8 @@
 """Simulator side of the SIL line protocol (see docs/protocol.md).
 
     Sim -> FC:  "S <t> <baro_alt_m> <accel_mps2>"    then "END" at shutdown
-    FC -> Sim:  "R <t> <state> <est_alt> <est_vel> <deploy 0|1>"
+    FC -> Sim:  "R <t> <state> <est_alt> <est_vel> <deploy 0-3>"
+                deploy bitmask: 1 = drogue/primary chute, 2 = main chute
                 "E <reason>"   (the FC rejected our line)
 
 Parsing mirrors the C++ side: strict, and any deviation is an error, never a
@@ -21,7 +22,7 @@ MAX_LINE_LENGTH = 256
 # A decimal number as both sides write it: optional '-', digits, optional
 # fraction, optional exponent. No '+', no hex, no inf/nan.
 _NUM = r"-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-_REPLY_RE = re.compile(rf"R ({_NUM}) ([A-Z]+) ({_NUM}) ({_NUM}) ([01])")
+_REPLY_RE = re.compile(rf"R ({_NUM}) ([A-Z]+) ({_NUM}) ({_NUM}) ([0-3])")
 
 
 class ProtocolError(ValueError):
@@ -34,7 +35,12 @@ class FcReply:
     state: str
     est_alt_m: float
     est_vel_mps: float
-    deploy: bool
+    deploy: bool                 # bit 0: primary (drogue) chute
+    deploy_main: bool = False    # bit 1: main chute (dual deploy)
+
+    @property
+    def command(self) -> int:
+        return int(self.deploy) | (2 if self.deploy_main else 0)
 
 
 def format_sensor_frame(t: float, baro_alt_m: float, accel_mps2: float) -> str:
@@ -65,7 +71,8 @@ def parse_reply(line: str) -> FcReply:
     vals = [float(t), float(alt), float(vel)]
     if not all(math.isfinite(v) for v in vals):
         raise ProtocolError(f"non-finite number in {line!r}")
-    return FcReply(vals[0], state, vals[1], vals[2], dep == "1")
+    mask = int(dep)
+    return FcReply(vals[0], state, vals[1], vals[2], bool(mask & 1), bool(mask & 2))
 
 
 def time_matches(sent_t: float, echoed_t: float) -> bool:

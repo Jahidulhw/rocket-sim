@@ -110,5 +110,14 @@
         "position_m": 0.28
       }
     ]
+  },
+  "sil": {
+    "flight_overrides": {
+      "motor.ejection_delay_s": 7.0
+    },
+    "notes": {
+      "fc": "the FC's built-in defaults were tuned for this rocket (docs/fc_walkthrough.md)",
+      "motor": "SIL flies the C6-7 so the ejection charge is a true backup ~1.4 s after apogee (identical to the original SIL setup; regression-pinned)"
+    }
   }
 }

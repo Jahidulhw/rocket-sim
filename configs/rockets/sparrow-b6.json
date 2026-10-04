@@ -85,5 +85,21 @@
         "position_m": 0.23
       }
     ]
+  },
+  "sil": {
+    "fc": {
+      "backup_timer_s": 7.7,
+      "max_boost_s": 1.4,
+      "min_deploy_after_launch_s": 1.2,
+      "powered_jerk_psd": 10000.0
+    },
+    "notes": {
+      "backup_timer_s": "nominal true apogee + max(1.0 s, 4 sigma of the apogee time under the standard dispersions), from lift-off; the C6 value 8.5 s follows the same rule (7.42 + 1.08)",
+      "max_boost_s": "longest burn x 1.6 (C6: 1.86 s -> 3.0 s): burnout fallback for a stuck accelerometer",
+      "min_deploy_after_launch_s": "final burnout x 1.35 (C6: 1.86 s -> 2.5 s): deploy inhibit",
+      "basis": "B6 burn 0.86 s; true apogee 6.69 s (sigma 0.12 s under dispersions); peak specific force ~34 g briefly saturates the +-24 g sensor (harmless, exempt from the stuck-sensor test)",
+      "motor": "B6-6 is the longest B6 delay: its charge fires ~0.17 s after true apogee, nearly together with the FC, so on this rocket the backup is almost simultaneous",
+      "powered_jerk_psd": "1e4 m^2/s^5 under thrust and for 0.5 s after each detected burnout (tail-off): the coast q (10) cannot follow thrust-curve and tail-off jerk on this rocket, the gate then rejected genuine samples and nominal flights went 'inconsistent' (found by the fleet SIL runs; see fc/include/fc/config.hpp). 1e4 sits in the measured plateau: apogee detection +0.04-0.05 s on every preset"
+    }
   }
 }

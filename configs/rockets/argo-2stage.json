@@ -11,7 +11,7 @@
     "separation": "ballistic coefficient m/(Cd A) ~ 400 kg/m^2 (booster) vs ~1600 (sustainer): the booster decelerates ~4x harder and falls away without a separation charge",
     "ignition_delay": "1.0 s: long enough for clean separation, short enough not to bleed speed",
     "booster_recovery": "36 in chute on the K454's 10 s ejection delay (near booster apogee)",
-    "backup": "sustainer motor flown plugged: the J381's longest delay (15 s) fires at 21.0 s, ~4 s BEFORE the 25.3 s true apogee. Independent timer at 27.5 s after first ignition: true apogee under dispersions is 25.4 +- 0.43 s (latest of 40: 26.2 s).",
+    "backup": "sustainer motor flown plugged: the J381's longest delay (15 s) fires at 21.0 s, ~4 s BEFORE the 25.3 s true apogee. Independent timer at 28.5 s after first ignition: after the latest dispersed apogee (25.9 s) and after the FC's own 26.9 s backup timer.",
     "sustainer_recovery": "dual deploy: 24 in drogue at apogee, 48 in main at 300 m",
     "expected_band": "reported K-to-J two-stage high-power flights reach roughly 12-20 kft (3.7-6 km). The first hand estimate (4-12 km) came from ideal delta-v and ignored supersonic drag, which the Mach model shows dominates (a lighter sustainer flies LOWER); revised to this documented range."
   },
@@ -49,7 +49,7 @@
       "main_diameter_m": 1.22,
       "main_cd": 0.8,
       "main_deploy_altitude_m": 300.0,
-      "backup_timer_s": 27.5
+      "backup_timer_s": 28.5
     },
     "sim": {
       "dt_s": 0.005,
@@ -154,6 +154,35 @@
           "position_m": 0.7
         }
       ]
+    }
+  },
+  "sil": {
+    "fc": {
+      "burns": 2,
+      "stage_ignition_timeout_s": 2.0,
+      "backup_timer_s": 26.9,
+      "max_boost_s": 5.0,
+      "min_deploy_after_launch_s": 8.1,
+      "main_deploy_altitude_m": 300.0,
+      "powered_jerk_psd": 10000.0,
+      "kf.jerk_psd": 1000.0
+    },
+    "sensors": {
+      "accel_noise_sigma_mps2": 1.0,
+      "accel_bias_mps2": 0.5,
+      "accel_range_mps2": 1962.0
+    },
+    "notes": {
+      "backup_timer_s": "nominal true apogee + max(1.0 s, 4 sigma of the apogee time under the standard dispersions), from lift-off; the C6 value 8.5 s follows the same rule (7.42 + 1.08)",
+      "max_boost_s": "longest burn x 1.6 (C6: 1.86 s -> 3.0 s): burnout fallback for a stuck accelerometer",
+      "min_deploy_after_launch_s": "final burnout x 1.35 (C6: 1.86 s -> 2.5 s): deploy inhibit",
+      "basis": "booster K454 burns 3.15 s, sustainer J381 1.87 s after a 1.0 s gap (final burnout 6.02 s); true apogee 25.28 s (sigma 0.41 s); peak ~28 g",
+      "burns": "2: after the first burnout the FC waits (deployment locked out, no gating) for the sustainer; ignition = accel > 20 m/s^2 for 5 samples",
+      "stage_ignition_timeout_s": "2.0 s = 1.0 s ignition delay + ~0.1 s detection + 0.9 s margin; if the sustainer never lights the FC continues as a single-stage coast and still deploys at apogee",
+      "sensors": "ADXL375-class +-200 g accelerometer (sigma 1.0 m/s^2, bias 0.5 m/s^2): the motor's peak specific force exceeds the hobby sensor's +-24 g, which would clip most of the burn and corrupt the filter's velocity by hundreds of m/s. The filter's R, full scale and reference gate are derived from this model.",
+      "main": "FC commands the main at 300 m; backup timer device at 28.5 s backs up the drogue",
+      "powered_jerk_psd": "1e4 m^2/s^5 under thrust and for 0.5 s after each detected burnout (tail-off): the coast q (10) cannot follow thrust-curve and tail-off jerk on this rocket, the gate then rejected genuine samples and nominal flights went 'inconsistent' (found by the fleet SIL runs; see fc/include/fc/config.hpp). 1e4 sits in the measured plateau: apogee detection +0.04-0.05 s on every preset",
+      "kf.jerk_psd": "1000 m^2/s^5 in coast (vs 10 for the subsonic rockets): this rocket coasts supersonically and decelerates through the transonic drag rise, where the true acceleration changes at up to ~95 m/s^3 (measured), about 6x the subsonic C6's coast jerk. With q=10 the gate rejected those genuine changes on hot-motor dispersed flights (fleet campaign). Scaling q with jerk^2 gives ~350; 1000 adds margin and sits in the measured plateau (M3: same accuracy up to 1000)."
     }
   }
 }

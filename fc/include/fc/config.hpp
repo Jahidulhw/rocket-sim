@@ -107,9 +107,61 @@ struct FcConfig {
   // 25 consecutive rejections (0.25 s) = persistent disagreement, not an
   // outlier: apogee detection is disabled and the backup timer decides.
   int max_consecutive_rejections = 25;
+  // Phase-dependent process noise. The constant-acceleration model needs a
+  // jerk level that matches the flight phase: under thrust, and during the
+  // motor's tail-off, acceleration changes fast (thrust curve); in clean
+  // coast it changes slowly (drag decay), which is what kf.jerk_psd (10) was
+  // tuned for. The FC knows the phase, so it tells the filter: in BOOST and
+  // for tailoff_s after each detected burnout it uses powered_jerk_psd.
+  // Why the tail-off window: burnout is declared when specific force drops
+  // below 5 m/s^2, which on a long tail-off (G80T) happens ~0.15 s BEFORE
+  // thrust really ends; the acceleration then keeps falling at ~60 m/s^3.
+  // With the coast q the gate rejected those genuine samples and the FC
+  // declared itself "inconsistent" on NOMINAL flights of every fleet rocket
+  // except the gentle C6 (found by the fleet SIL runs). Gating stays on the
+  // whole coast: the larger q widens the gate only moderately, so spikes are
+  // still rejected.
+  // DEFAULT 0 = "same as kf.jerk_psd": exactly the original single-q filter
+  // for any coast q, so the regression-pinned C6 rocket is bit-identical.
+  // Every other fleet preset sets powered_jerk_psd = 1e4 (configs/rockets/
+  // *.json "sil.fc"). Enabling it on the C6 too would only move one faulted
+  // run's deploy by -40 ms (closer to apogee); left off to honour the
+  // no-regression rule.
+  double powered_jerk_psd = 0.0;
+  double tailoff_s = 0.5;
+  // Debug only (--trace): per-frame filter internals as diagnostics.
+  bool trace = false;
   // No apogee deploy until 2.5 s after launch (C6 burn: 1.86 s), regardless
   // of what the burnout detector concluded.
   double min_deploy_after_launch_s = 2.5;
+
+  // ---- Multiple burns (passive staging) -----------------------------------
+  // Number of motor burns the rocket is built for (2 = booster + sustainer).
+  // Pre-flight configuration, like the backup timer: the FC never commands
+  // staging, it only needs to know a second burn is coming. While burns
+  // remain after a burnout, the FC is in COAST "awaiting ignition": no apogee
+  // decision, no deployment, no innovation gating (the sustainer's thrust
+  // step is real, not an outlier).
+  int burns = 1;
+  // Thrust re-detection: accel above this for N samples while coasting means
+  // a motor is burning -> back to BOOST (deployment locked out). In coast the
+  // reading is negative (drag); 20 m/s^2 (~2 g) is far from both coast and
+  // any sustainer's thrust. Applies even if the burn was not expected.
+  double next_ignition_accel_mps2 = 20.0;
+  int next_ignition_samples = 5;
+  // If the expected next motor has not lit this long after a burnout, assume
+  // it never will (dud sustainer) and continue as the final coast, so the
+  // rocket still gets apogee detection and a chute.
+  double stage_ignition_timeout_s = 3.0;
+
+  // ---- Dual deploy -------------------------------------------------------
+  // Main chute altitude above ground (0 = single deploy). Commanded during
+  // DESCENT, after the drogue, when the altitude estimate has been below it
+  // for main_samples frames. With a failed barometer there is no altitude:
+  // the main is commanded together with the drogue (drifts further, but
+  // lands softly).
+  double main_deploy_altitude_m = 0.0;
+  int main_samples = 5;
 
   // ---- DESCENT -> LANDED ---------------------------------------------------
   // Landed when altitude stays within +-3 m of a reference sample for 5 s.
